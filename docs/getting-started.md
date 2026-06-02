@@ -104,6 +104,9 @@ Now you can securely store secrets:
 
 # Store a username/password credential
 ./target/release/sealbox-cli credential set db/postgres --username app_user
+
+# Store a credential password from piped stdin
+printf '%s\n' "db-password" | ./target/release/sealbox-cli credential set db/postgres --username app_user
 ```
 
 ## Step 7: Retrieve Secrets

@@ -11,6 +11,8 @@ use crate::{
     secret_commands::{fetch_decrypted_secret, save_secret_value},
 };
 
+use super::input::read_secret_from_tty_or_stdin;
+
 #[derive(Debug, Deserialize, Serialize)]
 struct CredentialSecret {
     #[serde(rename = "type")]
@@ -60,8 +62,11 @@ async fn set_credential(
         anyhow::bail!("Username cannot be empty");
     }
 
-    output.print_info("Enter password (input will be hidden):");
-    let password = rpassword::read_password().context("Failed to read password")?;
+    let password = read_secret_from_tty_or_stdin(
+        output,
+        "Enter password (input will be hidden):",
+        "password",
+    )?;
     if password.trim().is_empty() {
         anyhow::bail!("Password cannot be empty");
     }

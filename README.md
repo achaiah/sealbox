@@ -80,6 +80,9 @@ export LISTEN_ADDR=127.0.0.1:8080
 # Store a username/password credential
 ./target/release/sealbox-cli credential set db/postgres --username app_user
 
+# Store a credential password from piped stdin
+printf '%s\n' "db-password" | ./target/release/sealbox-cli credential set db/postgres --username app_user
+
 # List credentials, optionally filtering by plaintext username metadata
 ./target/release/sealbox-cli credential list --username app
 
@@ -169,7 +172,7 @@ docker run --rm \
 
 ### Store and Retrieve Secrets
 
-Use `-it` for commands that prompt for hidden input.
+Use `-it` for commands that prompt for hidden input. For automation, omit `-t` and pipe the secret or password on stdin.
 
 ```bash
 docker run --rm -it \
@@ -203,6 +206,23 @@ To store a searchable username/password pair:
 
 ```bash
 docker run --rm -it \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli credential set db/postgres --username app_user
+```
+
+Non-interactive credential input works through stdin:
+
+```bash
+printf '%s\n' "db-password" | docker run --rm -i \
   --network container:sealbox \
   --user "$(id -u):$(id -g)" \
   --workdir /tmp \

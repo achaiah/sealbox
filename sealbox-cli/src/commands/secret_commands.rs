@@ -13,7 +13,7 @@ use std::str::FromStr;
 
 use crate::{SecretCommands, config::Config, output::OutputManager};
 
-use super::secret_archive;
+use super::{input::read_secret_from_tty_or_stdin, secret_archive};
 
 pub struct DecryptedSecret {
     pub key: String,
@@ -59,10 +59,11 @@ async fn set_secret(
     // Get secret value
     let secret_value = match value {
         Some(val) => val,
-        None => {
-            output.print_info("Enter secret value (input will be hidden):");
-            rpassword::read_password().context("Failed to read secret value")?
-        }
+        None => read_secret_from_tty_or_stdin(
+            output,
+            "Enter secret value (input will be hidden):",
+            "secret value",
+        )?,
     };
 
     if secret_value.trim().is_empty() {

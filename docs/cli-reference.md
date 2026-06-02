@@ -132,12 +132,12 @@ sealbox-cli key rotate [OPTIONS]
 Store a secret with the given key.
 
 ```bash
-sealbox-cli secret set <key> <value> [OPTIONS]
+sealbox-cli secret set <key> [value] [OPTIONS]
 ```
 
 **Arguments:**
 - `<key>` - Secret identifier
-- `<value>` - Secret value (use `-` to read from stdin)
+- `[value]` - Optional secret value. If omitted, the CLI reads from a hidden prompt when attached to a TTY, or from stdin when piped.
 
 **Options:**
 - `--ttl <seconds>` - Time-to-live in seconds (expires after creation time)
@@ -163,8 +163,8 @@ sealbox-cli secret set session_data "user-session-123" --ttl 1800
 # Store short-lived API key (expires in 5 minutes)
 sealbox-cli secret set quick_key "temp-key-456" --ttl 300
 
-# Read secret from stdin
-echo "my-secret" | sealbox-cli secret set api_key -
+# Read secret from piped stdin
+printf '%s\n' "my-secret" | sealbox-cli secret set api_key
 ```
 
 ### `secret get`
@@ -296,7 +296,7 @@ Credential commands store username/password pairs as encrypted JSON secret value
 
 ### `credential set`
 
-Store a username/password credential. The password is read from a hidden prompt.
+Store a username/password credential. The password is read from a hidden prompt when attached to a TTY, or from stdin when piped.
 
 ```bash
 sealbox-cli credential set <key> --username <username> [OPTIONS]
@@ -309,6 +309,9 @@ sealbox-cli credential set <key> --username <username> [OPTIONS]
 **Example:**
 ```bash
 sealbox-cli credential set db/postgres --username app_user
+
+# Non-interactive stdin
+printf '%s\n' "db-password" | sealbox-cli credential set db/postgres --username app_user
 ```
 
 ### `credential get`
