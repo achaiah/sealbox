@@ -290,13 +290,47 @@ sealbox-cli secret import <file> [OPTIONS]
 sealbox-cli secret import backups/sealbox-export.tar.enc
 ```
 
+## Password Generation Commands
+
+Password generation happens locally in the CLI. The standalone command prints generated passwords to stdout. Credential generation stores the password directly through the encrypted credential flow.
+
+### `password generate`
+
+Generate strong passwords or alphanumeric random-ID-style values.
+
+```bash
+sealbox-cli password generate [OPTIONS]
+```
+
+**Options:**
+- `--length <number>` - Password length (default: 24)
+- `--count <number>` - Number of passwords to generate (default: 1)
+- `--alphanumeric` - Use ASCII letters and digits only
+- `--no-symbols` - Exclude symbols
+- `--no-numbers` - Exclude numbers
+- `--no-uppercase` - Exclude uppercase letters
+- `--no-lowercase` - Exclude lowercase letters
+- `--exclude-ambiguous` - Exclude ambiguous characters such as `O`, `0`, `I`, `l`, and `1`
+
+**Examples:**
+```bash
+# Generate one broad-character password
+sealbox-cli password generate --length 32
+
+# Generate an alphanumeric random-id-style value
+sealbox-cli password generate --alphanumeric --length 40
+
+# Generate several values
+sealbox-cli password generate --count 5 --exclude-ambiguous
+```
+
 ## Credential Commands
 
 Credential commands store username/password pairs as encrypted JSON secret values. The username is also stored as plaintext metadata so credentials can be listed and filtered without decrypting every record.
 
 ### `credential set`
 
-Store a username/password credential. The password is read from a hidden prompt when attached to a TTY, or from stdin when piped.
+Store a username/password credential. The password is read from a hidden prompt when attached to a TTY, from stdin when piped, or generated locally with `--generate-password`.
 
 ```bash
 sealbox-cli credential set <key> --username <username> [OPTIONS]
@@ -305,10 +339,29 @@ sealbox-cli credential set <key> --username <username> [OPTIONS]
 **Options:**
 - `--username <username>` - Username to store in encrypted data and plaintext metadata
 - `--ttl <seconds>` - Time-to-live in seconds
+- `--generate-password` - Generate a strong password locally instead of prompting or reading stdin
+- `--show-password` - Print the generated password after it is saved
+- `--length <number>` - Generated password length (default: 24)
+- `--alphanumeric` - Generate only ASCII letters and digits
+- `--no-symbols` - Exclude symbols from generated passwords
+- `--no-numbers` - Exclude numbers from generated passwords
+- `--no-uppercase` - Exclude uppercase letters from generated passwords
+- `--no-lowercase` - Exclude lowercase letters from generated passwords
+- `--exclude-ambiguous` - Exclude ambiguous generated characters such as `O`, `0`, `I`, `l`, and `1`
 
 **Example:**
 ```bash
 sealbox-cli credential set db/postgres --username app_user
+
+# Generate and store a password without printing it
+sealbox-cli credential set db/postgres --username app_user --generate-password
+
+# Generate an alphanumeric password for systems that reject symbols
+sealbox-cli credential set api/service \
+  --username service_user \
+  --generate-password \
+  --alphanumeric \
+  --length 40
 
 # Non-interactive stdin
 printf '%s\n' "db-password" | sealbox-cli credential set db/postgres --username app_user

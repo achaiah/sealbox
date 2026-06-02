@@ -8,6 +8,7 @@ use crate::{
     CredentialCommands,
     config::Config,
     output::OutputManager,
+    password_commands::{generate_password, print_generated_password},
     secret_commands::{fetch_decrypted_secret, save_secret_value},
 };
 
@@ -33,12 +34,40 @@ struct ListSecretsResponse {
     secrets: Vec<SecretInfo>,
 }
 
+struct SetCredentialInput {
+    key: String,
+    username: String,
+    ttl: Option<i64>,
+    generate_password: bool,
+    show_password: bool,
+    password_policy: crate::PasswordPolicyArgs,
+}
+
 pub async fn handle_command(command: CredentialCommands, config: &Config) -> Result<()> {
     let output = OutputManager::new(config.output.format.clone());
 
     match command {
-        CredentialCommands::Set { key, username, ttl } => {
-            set_credential(config, &output, key, username, ttl).await
+        CredentialCommands::Set {
+            key,
+            username,
+            ttl,
+            generate_password,
+            show_password,
+            password_policy,
+        } => {
+            set_credential(
+                config,
+                &output,
+                SetCredentialInput {
+                    key,
+                    username,
+                    ttl,
+                    generate_password,
+                    show_password,
+                    password_policy,
+                },
+            )
+            .await
         }
         CredentialCommands::Get { key, version } => {
             get_credential(config, &output, key, version).await
@@ -50,46 +79,64 @@ pub async fn handle_command(command: CredentialCommands, config: &Config) -> Res
 async fn set_credential(
     config: &Config,
     output: &OutputManager,
-    key: String,
-    username: String,
-    ttl: Option<i64>,
+    input: SetCredentialInput,
 ) -> Result<()> {
     config
         .validate()
         .context("Configuration validation failed")?;
 
-    if username.trim().is_empty() {
+    if input.username.trim().is_empty() {
         anyhow::bail!("Username cannot be empty");
     }
 
-    let password = read_secret_from_tty_or_stdin(
-        output,
-        "Enter password (input will be hidden):",
-        "password",
-    )?;
+    if input.show_password && !input.generate_password {
+        anyhow::bail!("--show-password can only be used with --generate-password");
+    }
+
+    if !input.generate_password && input.password_policy.has_explicit_generation_option() {
+        anyhow::bail!("Password generation options require --generate-password");
+    }
+
+    let password = if input.generate_password {
+        generate_password(&input.password_policy.to_policy())?
+    } else {
+        read_secret_from_tty_or_stdin(output, "Enter password (input will be hidden):", "password")?
+    };
     if password.trim().is_empty() {
         anyhow::bail!("Password cannot be empty");
     }
 
+    let generated_password = if input.show_password {
+        Some(password.clone())
+    } else {
+        None
+    };
+
     let credential = CredentialSecret {
         credential_type: "credential".to_string(),
-        username: username.clone(),
+        username: input.username.clone(),
         password,
     };
     let metadata = CredentialMetadata {
         credential_type: "credential".to_string(),
-        username,
+        username: input.username,
     };
 
     save_secret_value(
         config,
         output,
-        key,
+        input.key,
         serde_json::to_string(&credential).context("Failed to serialize credential")?,
-        ttl,
+        input.ttl,
         Some(serde_json::to_string(&metadata).context("Failed to serialize credential metadata")?),
     )
-    .await
+    .await?;
+
+    if let Some(password) = generated_password {
+        print_generated_password(output, &password)?;
+    }
+
+    Ok(())
 }
 
 async fn get_credential(

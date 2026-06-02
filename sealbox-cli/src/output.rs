@@ -29,6 +29,25 @@ impl OutputManager {
         Ok(())
     }
 
+    pub fn print_passwords(&self, passwords: &[String]) -> Result<()> {
+        match self.format {
+            OutputFormat::Json | OutputFormat::Yaml => {
+                let value = if passwords.len() == 1 {
+                    json!({ "password": passwords[0] })
+                } else {
+                    json!({ "passwords": passwords })
+                };
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            OutputFormat::Table => {
+                for password in passwords {
+                    println!("{password}");
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn print_secret(
         &self,
         key: &str,

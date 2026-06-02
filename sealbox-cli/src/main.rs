@@ -2,10 +2,12 @@ mod commands;
 mod config;
 mod output;
 
-use crate::commands::{config_commands, credential_commands, key_commands, secret_commands};
+use crate::commands::{
+    config_commands, credential_commands, key_commands, password_commands, secret_commands,
+};
 use crate::config::{Config, OutputFormat};
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "sealbox")]
@@ -78,6 +80,11 @@ enum Commands {
     Credential {
         #[command(subcommand)]
         command: CredentialCommands,
+    },
+    /// Generate strong passwords
+    Password {
+        #[command(subcommand)]
+        command: PasswordCommands,
     },
 }
 
@@ -202,6 +209,43 @@ enum SecretCommands {
     },
 }
 
+#[derive(Args, Clone, Debug)]
+struct PasswordPolicyArgs {
+    /// Password length (default: 24)
+    #[arg(long)]
+    length: Option<usize>,
+    /// Generate only ASCII letters and digits
+    #[arg(long)]
+    alphanumeric: bool,
+    /// Exclude symbol characters
+    #[arg(long)]
+    no_symbols: bool,
+    /// Exclude number characters
+    #[arg(long)]
+    no_numbers: bool,
+    /// Exclude uppercase letters
+    #[arg(long)]
+    no_uppercase: bool,
+    /// Exclude lowercase letters
+    #[arg(long)]
+    no_lowercase: bool,
+    /// Exclude ambiguous characters such as O, 0, I, l, and 1
+    #[arg(long)]
+    exclude_ambiguous: bool,
+}
+
+#[derive(Subcommand)]
+enum PasswordCommands {
+    /// Generate a strong password locally
+    Generate {
+        /// Number of passwords to generate
+        #[arg(long, default_value_t = 1)]
+        count: usize,
+        #[command(flatten)]
+        policy: PasswordPolicyArgs,
+    },
+}
+
 #[derive(Subcommand)]
 enum CredentialCommands {
     /// Store a username/password credential
@@ -214,6 +258,14 @@ enum CredentialCommands {
         /// Time to live in seconds
         #[arg(long)]
         ttl: Option<i64>,
+        /// Generate a strong password locally instead of prompting or reading stdin
+        #[arg(long)]
+        generate_password: bool,
+        /// Print the generated password after it is saved
+        #[arg(long)]
+        show_password: bool,
+        #[command(flatten)]
+        password_policy: PasswordPolicyArgs,
     },
     /// Retrieve and decrypt a credential
     Get {
@@ -262,6 +314,82 @@ async fn main() -> Result<()> {
         Commands::Secret { command } => secret_commands::handle_command(command, &config).await,
         Commands::Credential { command } => {
             credential_commands::handle_command(command, &config).await
+        }
+        Commands::Password { command } => password_commands::handle_command(command, &config).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_password_generate_alphanumeric() {
+        let cli = Cli::try_parse_from([
+            "sealbox",
+            "password",
+            "generate",
+            "--alphanumeric",
+            "--length",
+            "40",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Password {
+                command:
+                    PasswordCommands::Generate {
+                        count,
+                        policy:
+                            PasswordPolicyArgs {
+                                length,
+                                alphanumeric,
+                                ..
+                            },
+                    },
+            } => {
+                assert_eq!(count, 1);
+                assert_eq!(length, Some(40));
+                assert!(alphanumeric);
+            }
+            _ => panic!("Expected password generate command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_credential_set_generate_password() {
+        let cli = Cli::try_parse_from([
+            "sealbox",
+            "credential",
+            "set",
+            "db/postgres",
+            "--username",
+            "app_user",
+            "--generate-password",
+            "--alphanumeric",
+            "--show-password",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Credential {
+                command:
+                    CredentialCommands::Set {
+                        key,
+                        username,
+                        generate_password,
+                        show_password,
+                        password_policy,
+                        ..
+                    },
+            } => {
+                assert_eq!(key, "db/postgres");
+                assert_eq!(username, "app_user");
+                assert!(generate_password);
+                assert!(show_password);
+                assert!(password_policy.alphanumeric);
+            }
+            _ => panic!("Expected credential set command"),
         }
     }
 }

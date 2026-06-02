@@ -102,8 +102,17 @@ Now you can securely store secrets:
 # Store an API key with TTL (expires in 1 hour)
 ./target/release/sealbox-cli secret set api_key "sk-1234567890" --ttl 3600
 
+# Generate a strong password locally
+./target/release/sealbox-cli password generate --length 32
+
+# Generate an alphanumeric random-id-style value
+./target/release/sealbox-cli password generate --alphanumeric --length 40
+
 # Store a username/password credential
 ./target/release/sealbox-cli credential set db/postgres --username app_user
+
+# Store a credential with a generated password
+./target/release/sealbox-cli credential set db/postgres --username app_user --generate-password
 
 # Store a credential password from piped stdin
 printf '%s\n' "db-password" | ./target/release/sealbox-cli credential set db/postgres --username app_user
@@ -143,6 +152,8 @@ Sealbox uses **client-side envelope encryption** for CLI writes and reads:
 **Key Point**: The server should not receive plaintext secret values or private keys during normal CLI operations.
 
 Credential usernames are intentionally duplicated into plaintext metadata for search. If usernames must remain private, store the pair as a regular encrypted secret value instead of using `credential`.
+
+Password generation is local to the CLI. Use `password generate` when you need to inspect or copy a generated value, and use `credential set --generate-password` when you want the generated password stored without printing it. Add `--alphanumeric` for systems that require random-ID-style values without symbols.
 
 Archive export/import is also client-side encrypted. The exported file contains a versioned envelope and an encrypted tar payload, so newer CLIs can identify old archive structures and migrate supported formats before importing records.
 

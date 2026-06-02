@@ -77,8 +77,17 @@ export LISTEN_ADDR=127.0.0.1:8080
 # Retrieve a secret
 ./target/release/sealbox-cli secret get mypassword
 
+# Generate a strong password locally
+./target/release/sealbox-cli password generate --length 32
+
+# Generate an alphanumeric random-id-style password
+./target/release/sealbox-cli password generate --alphanumeric --length 40
+
 # Store a username/password credential
 ./target/release/sealbox-cli credential set db/postgres --username app_user
+
+# Store a credential with a generated password
+./target/release/sealbox-cli credential set db/postgres --username app_user --generate-password
 
 # Store a credential password from piped stdin
 printf '%s\n' "db-password" | ./target/release/sealbox-cli credential set db/postgres --username app_user
@@ -219,6 +228,37 @@ docker run --rm -it \
   sealbox-cli credential set db/postgres --username app_user
 ```
 
+To generate a password inside the CLI container without touching the server:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  sealbox:local \
+  sealbox-cli password generate --alphanumeric --length 40
+```
+
+To store a credential with a generated password, omit `-t` unless you also need an interactive terminal for other flags. The generated password is not printed unless `--show-password` is explicitly passed.
+
+```bash
+docker run --rm \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli credential set db/postgres \
+    --username app_user \
+    --generate-password \
+    --alphanumeric \
+    --length 40
+```
+
 Non-interactive credential input works through stdin:
 
 ```bash
@@ -328,6 +368,8 @@ Sealbox implements client-side envelope encryption for CLI writes and reads:
 **Important**: Sealbox is intended as a lightweight local credentials store. If the same Docker runtime has the bearer token and private key, that runtime can retrieve secrets.
 
 Credential commands store the username and password together inside the encrypted secret value. The username is also duplicated into plaintext `metadata` so credentials can be listed and searched by username without decrypting every value.
+
+Password generation happens locally in the CLI using the Rust randomness stack already bundled with Sealbox. `password generate` prints generated values; `credential set --generate-password` stores the generated password without printing it unless `--show-password` is passed. Use `--alphanumeric` when you need random-ID-style values without symbols.
 
 Exported archives are encrypted locally: the CLI builds a tar payload in memory, encrypts it with AES-256-GCM, encrypts the archive data key with the configured public key, and writes a versioned envelope so future importers can migrate older archive structures.
 
