@@ -34,7 +34,7 @@ impl OutputManager {
         key: &str,
         value: &str,
         version: Option<i32>,
-        ttl: Option<i64>,
+        expires_at: Option<i64>,
     ) -> Result<()> {
         match self.format {
             OutputFormat::Json => {
@@ -45,8 +45,8 @@ impl OutputManager {
                 if let Some(v) = version {
                     obj["version"] = json!(v);
                 }
-                if let Some(t) = ttl {
-                    obj["ttl"] = json!(t);
+                if let Some(expires_at) = expires_at {
+                    obj["expires_at"] = json!(expires_at);
                 }
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             }
@@ -56,8 +56,8 @@ impl OutputManager {
                 if let Some(v) = version {
                     println!("version: {v}");
                 }
-                if let Some(t) = ttl {
-                    println!("ttl: {t}");
+                if let Some(expires_at) = expires_at {
+                    println!("expires_at: {expires_at}");
                 }
             }
             OutputFormat::Table => {
@@ -70,8 +70,8 @@ impl OutputManager {
                 if let Some(v) = version {
                     table.add_row(vec!["Version", &v.to_string()]);
                 }
-                if let Some(t) = ttl {
-                    table.add_row(vec!["TTL", &t.to_string()]);
+                if let Some(expires_at) = expires_at {
+                    table.add_row(vec!["Expires At", &Self::format_timestamp(expires_at)]);
                 }
 
                 println!("{table}");
@@ -146,6 +146,9 @@ impl OutputManager {
                     if let Some(expires_at) = secret.expires_at {
                         println!("  expires_at: {expires_at}");
                     }
+                    if let Some(metadata) = &secret.metadata {
+                        println!("  metadata: {metadata}");
+                    }
                     println!();
                 }
             }
@@ -158,6 +161,7 @@ impl OutputManager {
                     "Created At",
                     "Updated At",
                     "Expires At",
+                    "Metadata",
                 ]);
 
                 for secret in secrets {
@@ -170,6 +174,7 @@ impl OutputManager {
                             .expires_at
                             .map(Self::format_timestamp)
                             .unwrap_or_else(|| "Never".to_string()),
+                        secret.metadata.clone().unwrap_or_default(),
                     ]);
                 }
 
@@ -252,10 +257,6 @@ impl OutputManager {
 
     pub fn print_success(&self, message: &str) {
         println!("✅ {message}");
-    }
-
-    pub fn print_error(&self, message: &str) {
-        eprintln!("❌ {message}");
     }
 
     pub fn print_warning(&self, message: &str) {

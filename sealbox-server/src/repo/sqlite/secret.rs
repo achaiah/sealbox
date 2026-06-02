@@ -363,7 +363,8 @@ impl SecretRepo for SqliteSecretRepo {
                 version,
                 created_at,
                 updated_at,
-                expires_at
+                expires_at,
+                metadata
             FROM (
                 SELECT
                     key,
@@ -371,6 +372,7 @@ impl SecretRepo for SqliteSecretRepo {
                     created_at,
                     updated_at,
                     expires_at,
+                    metadata,
                     ROW_NUMBER() OVER (
                         PARTITION BY namespace, key
                         ORDER BY version DESC
@@ -390,6 +392,7 @@ impl SecretRepo for SqliteSecretRepo {
                     created_at: row.get(2)?,
                     updated_at: row.get(3)?,
                     expires_at: row.get(4)?,
+                    metadata: row.get(5)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()

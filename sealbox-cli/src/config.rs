@@ -63,15 +63,16 @@ impl Config {
     pub fn load() -> Result<Self> {
         let config_path = Self::config_file_path()?;
 
-        if !config_path.exists() {
-            return Ok(Self::default());
-        }
+        let mut config = if config_path.exists() {
+            let config_content = fs::read_to_string(&config_path).with_context(|| {
+                format!("Failed to read config file: {}", config_path.display())
+            })?;
 
-        let config_content = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
-
-        let mut config: Config = toml::from_str(&config_content)
-            .with_context(|| format!("Invalid config file format: {}", config_path.display()))?;
+            toml::from_str(&config_content)
+                .with_context(|| format!("Invalid config file format: {}", config_path.display()))?
+        } else {
+            Self::default()
+        };
 
         // Apply environment variable overrides
         config.apply_env_overrides()?;
@@ -190,6 +191,9 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_config() {
@@ -261,6 +265,7 @@ mod tests {
 
     #[test]
     fn test_apply_env_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = Config::default();
 
         // Set environment variables
@@ -286,6 +291,7 @@ mod tests {
 
     #[test]
     fn test_apply_env_file_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let token_file = temp_dir.path().join("token");
         let public_key_file = temp_dir.path().join("public.pem");
@@ -313,6 +319,50 @@ mod tests {
             std::env::remove_var("SEALBOX_TOKEN_FILE");
             std::env::remove_var("SEALBOX_PUBLIC_KEY_FILE");
             std::env::remove_var("SEALBOX_PRIVATE_KEY_FILE");
+        }
+    }
+
+    #[test]
+    fn test_load_applies_env_overrides_without_config_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let token_file = temp_dir.path().join("token");
+        let public_key_file = temp_dir.path().join("public.pem");
+        let private_key_file = temp_dir.path().join("private.pem");
+        fs::write(&token_file, "file-token\n").unwrap();
+        fs::write(&public_key_file, "public-key").unwrap();
+        fs::write(&private_key_file, "private-key").unwrap();
+
+        let original_home = std::env::var_os("HOME");
+
+        unsafe {
+            std::env::set_var("HOME", temp_dir.path());
+            std::env::set_var("SEALBOX_URL", "http://env-only.test");
+            std::env::set_var("SEALBOX_TOKEN_FILE", &token_file);
+            std::env::set_var("SEALBOX_PUBLIC_KEY_FILE", &public_key_file);
+            std::env::set_var("SEALBOX_PRIVATE_KEY_FILE", &private_key_file);
+            std::env::set_var("SEALBOX_OUTPUT_FORMAT", "json");
+        }
+
+        let config = Config::load().unwrap();
+
+        assert_eq!(config.server.url, "http://env-only.test");
+        assert_eq!(config.server.token, "file-token");
+        assert_eq!(config.keys.public_key_path, public_key_file);
+        assert_eq!(config.keys.private_key_path, private_key_file);
+        assert!(matches!(config.output.format, OutputFormat::Json));
+
+        unsafe {
+            if let Some(home) = original_home {
+                std::env::set_var("HOME", home);
+            } else {
+                std::env::remove_var("HOME");
+            }
+            std::env::remove_var("SEALBOX_URL");
+            std::env::remove_var("SEALBOX_TOKEN_FILE");
+            std::env::remove_var("SEALBOX_PUBLIC_KEY_FILE");
+            std::env::remove_var("SEALBOX_PRIVATE_KEY_FILE");
+            std::env::remove_var("SEALBOX_OUTPUT_FORMAT");
         }
     }
 

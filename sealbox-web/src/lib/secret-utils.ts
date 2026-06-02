@@ -16,6 +16,7 @@ export function convertSecretToUIData(secret: SecretInfo): SecretUIData {
     created_at: secret.created_at,
     updated_at: secret.updated_at,
     expires_at: secret.expires_at,
+    metadata: secret.metadata,
     // Computed display fields
     status: isExpired ? "expired" : isExpiring ? "expiring" : "active",
     createdAt: new Date(secret.created_at * 1000).toISOString().split("T")[0],
@@ -43,9 +44,13 @@ export function calculateSecretStats(secrets: SecretUIData[]) {
 export function filterSecrets(secrets: SecretUIData[], searchTerm: string) {
   if (!searchTerm.trim()) return secrets;
 
-  return secrets.filter((secret) =>
-    secret.key.toLowerCase().includes(searchTerm.toLowerCase()),
-  );
+  return secrets.filter((secret) => {
+    const normalizedSearch = searchTerm.toLowerCase();
+    return (
+      secret.key.toLowerCase().includes(normalizedSearch) ||
+      secret.metadata?.toLowerCase().includes(normalizedSearch)
+    );
+  });
 }
 
 /**

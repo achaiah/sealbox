@@ -6,6 +6,7 @@ export interface SecretInfo {
   created_at: number;
   updated_at: number;
   expires_at?: number;
+  metadata?: string;
 }
 
 export interface Secret {
@@ -91,6 +92,7 @@ export interface SecretUIData {
   created_at: number;
   updated_at: number;
   expires_at?: number;
+  metadata?: string;
   // Computed display fields
   status: SecretStatus;
   createdAt: string;

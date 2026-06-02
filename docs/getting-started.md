@@ -101,6 +101,9 @@ Now you can securely store secrets:
 
 # Store an API key with TTL (expires in 1 hour)
 ./target/release/sealbox-cli secret set api_key "sk-1234567890" --ttl 3600
+
+# Store a username/password credential
+./target/release/sealbox-cli credential set db/postgres --username app_user
 ```
 
 ## Step 7: Retrieve Secrets
@@ -111,6 +114,15 @@ Now you can securely store secrets:
 
 # List all your secrets
 ./target/release/sealbox-cli secret list
+
+# List credentials by searchable username metadata
+./target/release/sealbox-cli credential list --username app
+
+# Export a versioned encrypted archive
+./target/release/sealbox-cli secret export backups/sealbox-export.tar.enc
+
+# Import an encrypted archive into the current server
+./target/release/sealbox-cli secret import backups/sealbox-export.tar.enc
 ```
 
 ## Understanding the Security Model
@@ -126,6 +138,10 @@ Sealbox uses **client-side envelope encryption** for CLI writes and reads:
 5. **Only you can decrypt** secrets when retrieving them using your private key
 
 **Key Point**: The server should not receive plaintext secret values or private keys during normal CLI operations.
+
+Credential usernames are intentionally duplicated into plaintext metadata for search. If usernames must remain private, store the pair as a regular encrypted secret value instead of using `credential`.
+
+Archive export/import is also client-side encrypted. The exported file contains a versioned envelope and an encrypted tar payload, so newer CLIs can identify old archive structures and migrate supported formats before importing records.
 
 ## TTL (Time-To-Live) Features
 

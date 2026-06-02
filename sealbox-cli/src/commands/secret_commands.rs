@@ -1,14 +1,27 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use sealbox_server::{
-    crypto::{data_key::DataKey, master_key::PublicMasterKey},
-    repo::MasterKey,
+    crypto::{
+        data_key::DataKey,
+        master_key::{PrivateMasterKey, PublicMasterKey},
+    },
+    repo::{MasterKey, Secret},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{fs, str::FromStr};
+use std::str::FromStr;
 
 use crate::{SecretCommands, config::Config, output::OutputManager};
+
+use super::secret_archive;
+
+pub struct DecryptedSecret {
+    pub key: String,
+    pub value: String,
+    pub version: i32,
+    pub expires_at: Option<i64>,
+    pub metadata: Option<String>,
+}
 
 pub async fn handle_command(command: SecretCommands, config: &Config) -> Result<()> {
     let output = OutputManager::new(config.output.format.clone());
@@ -24,10 +37,10 @@ pub async fn handle_command(command: SecretCommands, config: &Config) -> Result<
         SecretCommands::List => list_secrets(config, &output).await,
         SecretCommands::History { key } => get_secret_history(config, &output, key).await,
         SecretCommands::Import { file, format } => {
-            import_secrets(config, &output, file, format).await
+            secret_archive::import_secrets(config, &output, file, format).await
         }
         SecretCommands::Export { file, keys, format } => {
-            export_secrets(config, &output, file, keys, format).await
+            secret_archive::export_secrets(config, &output, file, keys, format).await
         }
     }
 }
@@ -56,6 +69,81 @@ async fn set_secret(
         anyhow::bail!("Secret value cannot be empty");
     }
 
+    save_secret_value(config, output, key, secret_value, ttl, None).await
+}
+
+async fn fetch_active_master_key(config: &Config) -> Result<MasterKey> {
+    let client = Client::new();
+    let response = client
+        .get(format!("{}/v1/master-key/active", config.server.url))
+        .bearer_auth(&config.server.token)
+        .send()
+        .await
+        .context("Failed to request active master key")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to get error information".to_string());
+        anyhow::bail!(
+            "Server returned error while fetching active master key (status code: {}):\n{}",
+            status,
+            error_body
+        );
+    }
+
+    response
+        .json()
+        .await
+        .context("Failed to parse active master key response")
+}
+
+fn load_private_key(config: &Config) -> Result<PrivateMasterKey> {
+    let private_key_path = config
+        .keys
+        .private_key_path
+        .to_str()
+        .context("Private key path contains invalid characters")?;
+
+    let private_key_pem =
+        std::fs::read_to_string(private_key_path).context("Failed to read private key file")?;
+
+    PrivateMasterKey::from_str(&private_key_pem).context("Failed to parse private key")
+}
+
+async fn get_secret(
+    config: &Config,
+    output: &OutputManager,
+    key: String,
+    version: Option<i32>,
+) -> Result<()> {
+    config
+        .validate()
+        .context("Configuration validation failed")?;
+
+    output.print_info("Fetching and decrypting secret...");
+
+    let decrypted = fetch_decrypted_secret(config, &key, version).await?;
+
+    output.print_secret(
+        &decrypted.key,
+        &decrypted.value,
+        Some(decrypted.version),
+        decrypted.expires_at,
+    )?;
+    Ok(())
+}
+
+pub async fn save_secret_value(
+    config: &Config,
+    output: &OutputManager,
+    key: String,
+    secret_value: String,
+    ttl: Option<i64>,
+    metadata: Option<String>,
+) -> Result<()> {
     output.print_info("Fetching active master key...");
 
     let master_key = fetch_active_master_key(config).await?;
@@ -75,7 +163,8 @@ async fn set_secret(
         "encrypted_data": encrypted_data,
         "encrypted_data_key": encrypted_data_key,
         "master_key_id": master_key.id,
-        "ttl": ttl
+        "ttl": ttl,
+        "metadata": metadata
     });
 
     let client = Client::new();
@@ -111,51 +200,19 @@ async fn set_secret(
     Ok(())
 }
 
-async fn fetch_active_master_key(config: &Config) -> Result<MasterKey> {
-    let client = Client::new();
-    let response = client
-        .get(format!("{}/v1/master-key/active", config.server.url))
-        .bearer_auth(&config.server.token)
-        .send()
-        .await
-        .context("Failed to request active master key")?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unable to get error information".to_string());
-        anyhow::bail!(
-            "Server returned error while fetching active master key (status code: {}):\n{}",
-            status,
-            error_body
-        );
-    }
-
-    response
-        .json()
-        .await
-        .context("Failed to parse active master key response")
-}
-
-async fn get_secret(
+pub async fn fetch_decrypted_secret(
     config: &Config,
-    output: &OutputManager,
-    key: String,
+    key: &str,
     version: Option<i32>,
-) -> Result<()> {
+) -> Result<DecryptedSecret> {
     config
         .validate()
         .context("Configuration validation failed")?;
 
-    // Build request URL
     let mut url = format!("{}/v1/secrets/{}", config.server.url, key);
     if let Some(v) = version {
         url.push_str(&format!("?version={v}"));
     }
-
-    output.print_info("Fetching secret from server...");
 
     let client = Client::new();
     let response = client
@@ -178,53 +235,16 @@ async fn get_secret(
         );
     }
 
-    let secret_data: Value = response
+    let secret_data: Secret = response
         .json()
         .await
         .context("Failed to parse server response")?;
 
-    // Extract encrypted data from server response
-    let encrypted_data = secret_data
-        .get("encrypted_data")
-        .and_then(|v| v.as_array())
-        .context("Missing or invalid 'encrypted_data' field in response")?;
-
-    let encrypted_data_key = secret_data
-        .get("encrypted_data_key")
-        .and_then(|v| v.as_array())
-        .context("Missing or invalid 'encrypted_data_key' field in response")?;
-
-    // Convert JSON arrays to byte vectors
-    let encrypted_data_bytes: Vec<u8> = encrypted_data
-        .iter()
-        .map(|v| v.as_u64().unwrap_or(0) as u8)
-        .collect();
-
-    let encrypted_data_key_bytes: Vec<u8> = encrypted_data_key
-        .iter()
-        .map(|v| v.as_u64().unwrap_or(0) as u8)
-        .collect();
-
-    // Load private key and decrypt using server's crypto module
-    let private_key_path = config
-        .keys
-        .private_key_path
-        .to_str()
-        .context("Private key path contains invalid characters")?;
-
-    let private_key_pem =
-        std::fs::read_to_string(private_key_path).context("Failed to read private key file")?;
-
-    output.print_info("Decrypting secret...");
-
-    // Use server's crypto modules for decryption
-    let private_key =
-        sealbox_server::crypto::master_key::PrivateMasterKey::from_str(&private_key_pem)
-            .context("Failed to parse private key")?;
+    let private_key = load_private_key(config)?;
 
     // Decrypt the data key using RSA private key
     let decrypted_data_key = private_key
-        .decrypt(&encrypted_data_key_bytes)
+        .decrypt(&secret_data.encrypted_data_key)
         .context("Failed to decrypt data key with RSA private key")?;
 
     // Use the data key to decrypt the secret data
@@ -232,22 +252,19 @@ async fn get_secret(
         .context("Invalid data key format")?;
 
     let decrypted_bytes = data_key
-        .decrypt(&encrypted_data_bytes)
+        .decrypt(&secret_data.encrypted_data)
         .context("Failed to decrypt secret data")?;
 
     let decrypted_value =
         String::from_utf8(decrypted_bytes).context("Decrypted data is not valid UTF-8")?;
 
-    // Display result
-    let secret_version = secret_data
-        .get("version")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
-
-    let secret_ttl = secret_data.get("ttl").and_then(|v| v.as_i64());
-
-    output.print_secret(&key, &decrypted_value, secret_version, secret_ttl)?;
-    Ok(())
+    Ok(DecryptedSecret {
+        key: secret_data.key,
+        value: decrypted_value,
+        version: secret_data.version,
+        expires_at: secret_data.expires_at,
+        metadata: secret_data.metadata,
+    })
 }
 
 async fn delete_secret(
@@ -351,125 +368,6 @@ async fn get_secret_history(_config: &Config, output: &OutputManager, key: Strin
     Ok(())
 }
 
-async fn import_secrets(
-    config: &Config,
-    output: &OutputManager,
-    file_path: String,
-    format: String,
-) -> Result<()> {
-    config
-        .validate()
-        .context("Configuration validation failed")?;
-
-    if !["json", "yaml"].contains(&format.as_str()) {
-        anyhow::bail!(
-            "Unsupported file format: {}. Supported formats: json, yaml",
-            format
-        );
-    }
-
-    output.print_info(&format!("Importing secrets from {file_path}..."));
-
-    let file_content = fs::read_to_string(&file_path)
-        .with_context(|| format!("Failed to read file: {file_path}"))?;
-
-    let secrets_data: Value = match format.as_str() {
-        "json" => serde_json::from_str(&file_content)
-            .with_context(|| format!("Failed to parse JSON file: {file_path}"))?,
-        "yaml" => {
-            // Simplified handling, assumes JSON format here
-            // In actual project, serde_yaml dependency can be added
-            serde_json::from_str(&file_content)
-                .with_context(|| format!("Failed to parse YAML file: {file_path}"))?
-        }
-        _ => unreachable!(),
-    };
-
-    let secrets_obj = secrets_data.as_object().context(
-        "Import file must contain an object with keys as secret names and values as secret content",
-    )?;
-
-    // No need to load public key since server handles encryption
-
-    let mut success_count = 0;
-    let mut error_count = 0;
-
-    for (secret_key, secret_value) in secrets_obj {
-        let value_str = match secret_value.as_str() {
-            Some(s) => s,
-            None => {
-                output.print_warning(&format!(
-                    "Skipping secret '{secret_key}': value is not a string"
-                ));
-                error_count += 1;
-                continue;
-            }
-        };
-
-        match import_single_secret(config, secret_key, value_str).await {
-            Ok(()) => {
-                output.print_info(&format!("✓ Imported secret '{secret_key}'"));
-                success_count += 1;
-            }
-            Err(e) => {
-                output.print_error(&format!("✗ Failed to import secret '{secret_key}': {e}"));
-                error_count += 1;
-            }
-        }
-    }
-
-    output.print_success(&format!(
-        "Import completed! Success: {success_count}, Failed: {error_count}"
-    ));
-
-    Ok(())
-}
-
-async fn import_single_secret(config: &Config, key: &str, value: &str) -> Result<()> {
-    let payload = json!({
-        "secret": value,
-        "ttl": null
-    });
-
-    let client = Client::new();
-    let response = client
-        .put(format!("{}/v1/secrets/{}", config.server.url, key))
-        .bearer_auth(&config.server.token)
-        .json(&payload)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let error_body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Server error: {}", error_body);
-    }
-
-    Ok(())
-}
-
-async fn export_secrets(
-    _config: &Config,
-    output: &OutputManager,
-    file_path: String,
-    keys_pattern: Option<String>,
-    format: String,
-) -> Result<()> {
-    output
-        .print_warning("Export functionality requires server API support for listing all secrets");
-    output.print_info("Current version does not support batch export functionality");
-
-    // This is the implementation framework for reserved functionality
-    if keys_pattern.is_some() {
-        output.print_info(&format!(
-            "Future support for pattern-based export: {keys_pattern:?}"
-        ));
-    }
-    output.print_info(&format!("Export format: {format}"));
-    output.print_info(&format!("Export file: {file_path}"));
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,26 +405,13 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_import_secrets_invalid_format() {
-        let (config, _temp_dir) = create_test_config();
-        let output = OutputManager::new(OutputFormat::Json);
-
-        let result =
-            import_secrets(&config, &output, "test.txt".to_string(), "xml".to_string()).await;
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Unsupported file format")
-        );
-    }
-
     #[test]
-    fn test_import_single_secret_logic() {
-        // This mainly tests function signature and basic logic
-        // Actual network request testing requires mock server
-        // Test placeholder - functionality verified by integration tests
+    fn test_load_private_key_missing_file() {
+        let (config, _temp_dir) = create_test_config();
+
+        let result = load_private_key(&config);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("private key file"));
     }
 }

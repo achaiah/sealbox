@@ -17,11 +17,12 @@ mod sqlite;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretInfo {
-    pub key: String,             // Secret key identifier
-    pub version: i32,            // Latest version number
-    pub created_at: i64,         // Creation timestamp (Unix time)
-    pub updated_at: i64,         // Last update timestamp (Unix time)
-    pub expires_at: Option<i64>, // Expiry timestamp (Unix time), optional for TTL
+    pub key: String,              // Secret key identifier
+    pub version: i32,             // Latest version number
+    pub created_at: i64,          // Creation timestamp (Unix time)
+    pub updated_at: i64,          // Last update timestamp (Unix time)
+    pub expires_at: Option<i64>,  // Expiry timestamp (Unix time), optional for TTL
+    pub metadata: Option<String>, // Optional plaintext metadata for search/display
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

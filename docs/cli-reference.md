@@ -233,48 +233,105 @@ sealbox-cli secret delete <key> [OPTIONS]
 sealbox-cli secret delete old_password --version 1
 ```
 
-### `secret import`
+### `secret export`
 
-Import secrets from a file.
+Export latest secret versions to a Sealbox encrypted archive. The CLI decrypts each selected secret locally, writes a tar payload in memory, encrypts that tar payload with AES-256-GCM, and encrypts the archive data key with the configured public key.
 
 ```bash
-sealbox-cli secret import [OPTIONS]
+sealbox-cli secret export <file> [OPTIONS]
 ```
 
 **Options:**
-- `--file <path>` - JSON file containing secrets
-- `--format <format>` - Input format: `json` (default)
+- `--keys <text>` - Export only keys containing this substring
+- `--format <format>` - Archive format: `encrypted-tar` or `sealbox-v1` (default: `encrypted-tar`)
 - `--url <url>` - Server URL (overrides config)
 - `--token <token>` - Authentication token (overrides config)
+- `--public-key <path>` - Public key used to encrypt the archive data key
+- `--private-key <path>` - Private key used to decrypt exported secrets
 
-**Input File Format (JSON):**
-```json
-{
-  "secrets": {
-    "db_password": "secret-value-1",
-    "api_key": "secret-value-2"
-  }
-}
+**Archive format:**
+- Outer file: JSON envelope with `envelope_version`, cipher names, and base64 ciphertext fields
+- Encrypted payload: tar archive containing `manifest.json` and `secrets.json`
+- `manifest.json`: includes `format_version` so newer importers can migrate older payload structures
+- Output file permissions: `0600` on Unix when the CLI creates the file
+
+**Examples:**
+```bash
+# Export all latest secret versions
+sealbox-cli secret export backups/sealbox-export.tar.enc
+
+# Export only matching keys
+sealbox-cli secret export backups/db-secrets.tar.enc --keys db/
 ```
+
+### `secret import`
+
+Import secrets from a Sealbox encrypted archive. The CLI decrypts the archive locally with the configured private key, reads the tar manifest version, migrates supported old structures, and stores each secret through the normal client-side encrypted write path.
+
+```bash
+sealbox-cli secret import <file> [OPTIONS]
+```
+
+**Options:**
+- `--format <format>` - Archive format: `encrypted-tar` or `sealbox-v1` (default: `encrypted-tar`)
+- `--url <url>` - Server URL (overrides config)
+- `--token <token>` - Authentication token (overrides config)
+- `--private-key <path>` - Private key used to decrypt the archive data key
+
+**Import behavior:**
+- Imported records become new versions in the destination database
+- Plaintext metadata is preserved
+- Future `expires_at` values are converted back into TTL seconds at import time
+- Already expired records are skipped
+- Unsupported envelope or archive format versions are rejected
 
 **Example:**
 ```bash
-sealbox-cli secret import --file secrets.json
+sealbox-cli secret import backups/sealbox-export.tar.enc
 ```
 
-### `secret export`
+## Credential Commands
 
-Export secrets to a file (requires local decryption).
+Credential commands store username/password pairs as encrypted JSON secret values. The username is also stored as plaintext metadata so credentials can be listed and filtered without decrypting every record.
+
+### `credential set`
+
+Store a username/password credential. The password is read from a hidden prompt.
 
 ```bash
-sealbox-cli secret export [OPTIONS]
+sealbox-cli credential set <key> --username <username> [OPTIONS]
 ```
 
 **Options:**
-- `--file <path>` - Output file path
-- `--format <format>` - Output format: `json` (default)
-- `--url <url>` - Server URL (overrides config)
-- `--token <token>` - Authentication token (overrides config)
+- `--username <username>` - Username to store in encrypted data and plaintext metadata
+- `--ttl <seconds>` - Time-to-live in seconds
+
+**Example:**
+```bash
+sealbox-cli credential set db/postgres --username app_user
+```
+
+### `credential get`
+
+Retrieve and decrypt a credential.
+
+```bash
+sealbox-cli credential get <key> [OPTIONS]
+```
+
+**Options:**
+- `--version <version>` - Specific version to retrieve
+
+### `credential list`
+
+List credentials using plaintext metadata. Passwords are not included.
+
+```bash
+sealbox-cli credential list [OPTIONS]
+```
+
+**Options:**
+- `--username <text>` - Filter by username substring
 
 ## TTL and Administration
 

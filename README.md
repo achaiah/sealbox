@@ -77,9 +77,184 @@ export LISTEN_ADDR=127.0.0.1:8080
 # Retrieve a secret
 ./target/release/sealbox-cli secret get mypassword
 
+# Store a username/password credential
+./target/release/sealbox-cli credential set db/postgres --username app_user
+
+# List credentials, optionally filtering by plaintext username metadata
+./target/release/sealbox-cli credential list --username app
+
+# Export an encrypted archive for backup or migration
+./target/release/sealbox-cli secret export backups/sealbox-export.tar.enc
+
+# Import an encrypted archive into the current server
+./target/release/sealbox-cli secret import backups/sealbox-export.tar.enc
+
 # List all commands
 ./target/release/sealbox-cli --help
 ```
+
+## Docker Container How-To
+
+The Docker image contains both `sealbox-server` and `sealbox-cli`. Run the server as the default container command, then use short-lived CLI containers on the same network namespace for key setup, secret operations, and archive import/export.
+
+### Build the Image
+
+```bash
+docker build -t sealbox:local .
+```
+
+### Prepare Local Files
+
+```bash
+mkdir -p .sealbox-secrets .sealbox-keys backups
+openssl rand -base64 32 > .sealbox-secrets/auth_token
+
+# Bind-mounted Docker secret files must be readable by the non-root
+# sealbox user inside the server container. Docker-managed secrets are
+# usually mounted this way automatically.
+chmod 0444 .sealbox-secrets/auth_token
+```
+
+### Start the Server Container
+
+```bash
+docker volume create sealbox-data
+
+docker run -d \
+  --name sealbox \
+  -p 127.0.0.1:8080:8080 \
+  -v sealbox-data:/data \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -e AUTH_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  sealbox:local
+
+curl -fsS http://127.0.0.1:8080/healthz/ready
+```
+
+`AUTH_TOKEN_FILE` is read by the server as the bearer-token contents. The server does not need the public or private key files.
+
+### Generate and Register Keys
+
+Use the same image as a CLI container. `--network container:sealbox` lets the CLI reach the server at `http://127.0.0.1:8080` without publishing extra ports.
+
+```bash
+docker run --rm \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-keys:/keys" \
+  sealbox:local \
+  sealbox-cli key generate \
+    --public-key-path /keys/public_key.pem \
+    --private-key-path /keys/private_key.pem
+
+chmod 0400 .sealbox-keys/private_key.pem
+chmod 0444 .sealbox-keys/public_key.pem
+
+docker run --rm \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli key register
+```
+
+`SEALBOX_TOKEN_FILE` is read by the CLI as the bearer-token contents. `SEALBOX_PUBLIC_KEY_FILE` and `SEALBOX_PRIVATE_KEY_FILE` are paths to mounted PEM key files.
+
+### Store and Retrieve Secrets
+
+Use `-it` for commands that prompt for hidden input.
+
+```bash
+docker run --rm -it \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli secret set db/password
+
+docker run --rm \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli secret get db/password
+```
+
+To store a searchable username/password pair:
+
+```bash
+docker run --rm -it \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli credential set db/postgres --username app_user
+```
+
+### Export and Import All Secrets
+
+Export produces a versioned encrypted archive. The outer file contains an `envelope_version`; the encrypted tar payload contains `manifest.json` with `format_version` and `secrets.json`.
+
+```bash
+docker run --rm \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -v "$PWD/backups:/backups" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli secret export /backups/sealbox-export.tar.enc
+```
+
+Import decrypts the archive locally, migrates supported old archive formats, and writes each record through the normal client-side encrypted save path.
+
+```bash
+docker run --rm \
+  --network container:sealbox \
+  --user "$(id -u):$(id -g)" \
+  --workdir /tmp \
+  -v "$PWD/.sealbox-secrets/auth_token:/run/secrets/sealbox_auth_token:ro" \
+  -v "$PWD/.sealbox-keys:/keys:ro" \
+  -v "$PWD/backups:/backups:ro" \
+  -e SEALBOX_URL=http://127.0.0.1:8080 \
+  -e SEALBOX_TOKEN_FILE=/run/secrets/sealbox_auth_token \
+  -e SEALBOX_PUBLIC_KEY_FILE=/keys/public_key.pem \
+  -e SEALBOX_PRIVATE_KEY_FILE=/keys/private_key.pem \
+  sealbox:local \
+  sealbox-cli secret import /backups/sealbox-export.tar.enc
+```
+
+Keep `.sealbox-keys/private_key.pem` and exported archives protected. Any process with the bearer token and matching private key can retrieve plaintext secrets.
 
 #### Using the Web UI
 1. Navigate to the `sealbox-web` directory
@@ -131,6 +306,10 @@ Sealbox implements client-side envelope encryption for CLI writes and reads:
 6. **Client Decryption**: Only clients with the private key can decrypt retrieved secrets
 
 **Important**: Sealbox is intended as a lightweight local credentials store. If the same Docker runtime has the bearer token and private key, that runtime can retrieve secrets.
+
+Credential commands store the username and password together inside the encrypted secret value. The username is also duplicated into plaintext `metadata` so credentials can be listed and searched by username without decrypting every value.
+
+Exported archives are encrypted locally: the CLI builds a tar payload in memory, encrypts it with AES-256-GCM, encrypts the archive data key with the configured public key, and writes a versioned envelope so future importers can migrate older archive structures.
 
 ## How It Works
 

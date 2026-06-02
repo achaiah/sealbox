@@ -2,7 +2,7 @@ mod commands;
 mod config;
 mod output;
 
-use crate::commands::{config_commands, key_commands, secret_commands};
+use crate::commands::{config_commands, credential_commands, key_commands, secret_commands};
 use crate::config::{Config, OutputFormat};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -73,6 +73,11 @@ enum Commands {
     Secret {
         #[command(subcommand)]
         command: SecretCommands,
+    },
+    /// Manage username/password credentials
+    Credential {
+        #[command(subcommand)]
+        command: CredentialCommands,
     },
 }
 
@@ -176,24 +181,53 @@ enum SecretCommands {
         /// Secret key name
         key: String,
     },
-    /// Import secrets from file
+    /// Import secrets from an encrypted Sealbox archive
     Import {
-        /// Input file path
+        /// Encrypted archive file path
         file: String,
         /// File format
-        #[arg(long, default_value = "json")]
+        #[arg(long, default_value = "encrypted-tar")]
         format: String,
     },
-    /// Export secrets to file
+    /// Export secrets to an encrypted Sealbox archive
     Export {
-        /// Output file path
+        /// Encrypted archive file path
         file: String,
-        /// Key pattern matching
+        /// Key substring filter
         #[arg(long)]
         keys: Option<String>,
-        /// Output format
-        #[arg(long, default_value = "json")]
+        /// File format
+        #[arg(long, default_value = "encrypted-tar")]
         format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum CredentialCommands {
+    /// Store a username/password credential
+    Set {
+        /// Credential key name
+        key: String,
+        /// Username stored as searchable plaintext metadata and encrypted value data
+        #[arg(long)]
+        username: String,
+        /// Time to live in seconds
+        #[arg(long)]
+        ttl: Option<i64>,
+    },
+    /// Retrieve and decrypt a credential
+    Get {
+        /// Credential key name
+        key: String,
+        /// Specific version number
+        #[arg(long)]
+        version: Option<i32>,
+    },
+    /// List credentials using plaintext metadata
+    List {
+        /// Filter by username substring
+        #[arg(long)]
+        username: Option<String>,
     },
 }
 
@@ -226,5 +260,8 @@ async fn main() -> Result<()> {
         Commands::Config { command } => config_commands::handle_command(command, &mut config).await,
         Commands::Key { command } => key_commands::handle_command(command, &config).await,
         Commands::Secret { command } => secret_commands::handle_command(command, &config).await,
+        Commands::Credential { command } => {
+            credential_commands::handle_command(command, &config).await
+        }
     }
 }
