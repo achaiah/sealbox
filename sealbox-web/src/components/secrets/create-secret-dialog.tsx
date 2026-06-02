@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -14,11 +13,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Plus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { useCreateSecret } from "@/hooks/use-api";
-import type { CreateSecretRequest } from "@/lib/types";
 
 interface CreateSecretDialogProps {
   children?: React.ReactNode;
@@ -27,49 +23,27 @@ interface CreateSecretDialogProps {
 export function CreateSecretDialog({ children }: CreateSecretDialogProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const [newSecret, setNewSecret] = useState({
-    name: "",
-    value: "",
-    ttl: "",
-  });
-  const createSecretMutation = useCreateSecret();
+  const [newSecret, setNewSecret] = useState({ name: "" });
 
   const handleAddSecret = async () => {
-    if (!newSecret.name || !newSecret.value) {
+    if (!newSecret.name) {
       toast.error(t("secrets.dialog.missingFields"), {
-        description: t("secrets.dialog.nameAndValueRequired"),
+        description: t("secrets.dialog.name"),
       });
       return;
     }
 
-    try {
-      const requestData: CreateSecretRequest = {
-        secret: newSecret.value,
-        ...(newSecret.ttl && { ttl: parseInt(newSecret.ttl, 10) }),
-      };
+    toast.info(t("secrets.decryptHint.title"), {
+      description: `sealbox-cli secret set ${newSecret.name}`,
+      duration: 5000,
+    });
 
-      await createSecretMutation.mutateAsync({
-        key: newSecret.name,
-        data: requestData,
-      });
-
-      toast.success(t("secrets.dialog.secretAdded"), {
-        description: t("secrets.dialog.hasBeenCreated", {
-          name: newSecret.name,
-        }),
-      });
-
-      setNewSecret({ name: "", value: "", ttl: "" });
-      setOpen(false);
-    } catch (error: any) {
-      toast.error(t("common.error"), {
-        description: error.message || "Failed to create secret",
-      });
-    }
+    setNewSecret({ name: "" });
+    setOpen(false);
   };
 
   const handleCancel = () => {
-    setNewSecret({ name: "", value: "", ttl: "" });
+    setNewSecret({ name: "" });
     setOpen(false);
   };
 
@@ -100,53 +74,12 @@ export function CreateSecretDialog({ children }: CreateSecretDialogProps) {
               className="h-8"
             />
           </div>
-          <div>
-            <Label htmlFor="value" className="text-xs">
-              {t("secrets.dialog.value")}
-            </Label>
-            <Textarea
-              id="value"
-              placeholder={t("secrets.dialog.valueHelp")}
-              value={newSecret.value}
-              onChange={(e) =>
-                setNewSecret({ ...newSecret, value: e.target.value })
-              }
-              className="min-h-16"
-            />
-          </div>
-          <div>
-            <Label htmlFor="ttl" className="text-xs">
-              {t("secrets.dialog.ttl")}
-            </Label>
-            <Input
-              id="ttl"
-              type="number"
-              placeholder={t("secrets.dialog.ttlHelp")}
-              value={newSecret.ttl}
-              onChange={(e) =>
-                setNewSecret({ ...newSecret, ttl: e.target.value })
-              }
-              className="h-8"
-            />
-          </div>
         </div>
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={handleCancel}
-            size="sm"
-            disabled={createSecretMutation.isPending}
-          >
+          <Button variant="outline" onClick={handleCancel} size="sm">
             {t("common.cancel")}
           </Button>
-          <Button
-            onClick={handleAddSecret}
-            size="sm"
-            disabled={createSecretMutation.isPending}
-          >
-            {createSecretMutation.isPending && (
-              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-            )}
+          <Button onClick={handleAddSecret} size="sm">
             {t("secrets.controls.addSecret")}
           </Button>
         </DialogFooter>

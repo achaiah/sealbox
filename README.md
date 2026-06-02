@@ -2,15 +2,15 @@
 
 [![CI](https://github.com/realmorrisliu/sealbox/workflows/CI/badge.svg)](https://github.com/realmorrisliu/sealbox/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org)
 
-> A lightweight, self-hosted secret storage service with end-to-end encryption
+> A lightweight, self-hosted local secret storage service with client-side encryption
 
 Sealbox is a simple yet secure secret management solution designed for developers and small teams. Built with Rust, it provides envelope encryption, SQLite storage, and a REST API in a single binary with minimal configuration required.
 
 ## Features
 
-- 🔐 **Server-side encryption** - Secrets are encrypted using envelope encryption on the server
+- 🔐 **Client-side secret encryption** - The CLI encrypts secret values before sending them to the server
 - ⏰ **TTL Support** - Automatic expiration with lazy cleanup strategy
 - 📦 **Single binary** - No complex setup, just run the executable
 - 🗃️ **SQLite storage** - Embedded database, no external dependencies
@@ -25,7 +25,7 @@ Sealbox is a simple yet secure secret management solution designed for developer
 
 ### Prerequisites
 
-- Rust 1.85+ (for building from source)
+- Rust 1.95+ (for building from source)
 
 ### Installation
 
@@ -44,6 +44,7 @@ cargo build --release
 # Set environment variables
 export STORE_PATH=/var/lib/sealbox.db
 export AUTH_TOKEN=your-secret-token
+# Or use AUTH_TOKEN_FILE=/run/secrets/sealbox_auth_token
 export LISTEN_ADDR=127.0.0.1:8080
 
 # Start the server
@@ -87,6 +88,7 @@ export LISTEN_ADDR=127.0.0.1:8080
 4. Open http://localhost:3000 in your browser
 5. Enter your server URL and AUTH_TOKEN to login
 6. Manage secrets through the intuitive web interface
+   - Secret creation remains CLI-first because browser-side encryption is not implemented
 
 **Web UI Features:**
 - 🔐 Secure token-based authentication
@@ -108,6 +110,7 @@ Configure the server using environment variables:
 |----------|-------------|---------|
 | `STORE_PATH` | SQLite database file path | `/var/lib/sealbox.db` |
 | `AUTH_TOKEN` | Static bearer token for API authentication | `your-secret-token` |
+| `AUTH_TOKEN_FILE` | File containing the bearer token, useful for Docker secrets | `/run/secrets/sealbox_auth_token` |
 | `LISTEN_ADDR` | Server listen address and port | `127.0.0.1:8080` |
 
 ### CLI Configuration
@@ -118,26 +121,26 @@ The CLI uses TOML configuration files with environment variable overrides:
 
 ## Security Model
 
-Sealbox implements server-side envelope encryption with client-side decryption:
+Sealbox implements client-side envelope encryption for CLI writes and reads:
 
 1. **User Key Pair**: Each user generates an RSA key pair locally
-2. **Client Sends Plaintext**: CLI sends secrets as plaintext to the server over HTTPS
-3. **Server-Side Encryption**: Server encrypts secrets using envelope encryption
-4. **Data Keys**: Random AES-256-GCM keys encrypt individual secrets
-5. **Envelope Encryption**: Data keys are encrypted with the user's RSA public key
+2. **Client-Side Encryption**: The CLI fetches the active public key and encrypts the secret locally
+3. **Data Keys**: Random AES-256-GCM keys encrypt individual secrets
+4. **Envelope Encryption**: Data keys are encrypted with the active RSA public key
+5. **Encrypted Storage**: The server stores encrypted data and encrypted data keys in SQLite
 6. **Client Decryption**: Only clients with the private key can decrypt retrieved secrets
 
-**Important**: While secrets are sent as plaintext to the server, only the user with the corresponding private key can decrypt stored data.
+**Important**: Sealbox is intended as a lightweight local credentials store. If the same Docker runtime has the bearer token and private key, that runtime can retrieve secrets.
 
 ## How It Works
 
 ```
-┌─────────────┐    send       ┌──────────────┐    encrypt   ┌──────────────┐
-│   Secret    │──────────────▶│    Server    │─────────────▶│ Encrypted    │
-│ (plaintext) │               │              │              │ Secret +     │
-│             │               │              │              │ Encrypted    │
-│             │               │              │              │ Data Key     │
-└─────────────┘               └──────────────┘              └──────────────┘
+┌─────────────┐   encrypt locally   ┌──────────────┐    store     ┌──────────────┐
+│   Secret    │────────────────────▶│ Encrypted    │─────────────▶│   Server +   │
+│ (plaintext) │                     │ Secret +     │              │   SQLite     │
+│             │                     │ Encrypted    │              │              │
+│             │                     │ Data Key     │              │              │
+└─────────────┘                     └──────────────┘              └──────────────┘
 ```
 
 ---
@@ -156,8 +159,10 @@ GET /v1/secrets
 PUT /v1/secrets/:key
 Content-Type: application/json
 { 
-  "secret": "your-secret-value",
-  "ttl": 3600  # Optional: expires in 3600 seconds (1 hour)
+  "encrypted_data": [1, 2, 3],
+  "encrypted_data_key": [4, 5, 6],
+  "master_key_id": "00000000-0000-0000-0000-000000000000",
+  "ttl": 3600
 }
 
 # Retrieve a secret (latest version, automatically checks expiration)
@@ -185,8 +190,18 @@ Content-Type: application/json
 
 # List public keys
 GET /v1/master-key
+# Returns: {"master_keys": [...]}
 
-# Rotate keys
+# Fetch active public key for client-side encryption
+GET /v1/master-key/active
+
+# Fetch a specific public key
+GET /v1/master-key/by-id/:id
+
+# Fetch encrypted records for client-side data-key rewrap
+GET /v1/master-key/by-id/:id/secrets
+
+# Rotate keys with client-side rewrapped data keys
 PUT /v1/master-key
 ```
 

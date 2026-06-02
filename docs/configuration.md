@@ -12,6 +12,7 @@ The Sealbox server is configured entirely through environment variables.
 |----------|-------------|---------|
 | `STORE_PATH` | Path to SQLite database file | `/var/lib/sealbox/sealbox.db` |
 | `AUTH_TOKEN` | Static bearer token for API authentication | `your-secure-token-123` |
+| `AUTH_TOKEN_FILE` | File containing the bearer token, useful for Docker secrets | `/run/secrets/sealbox_auth_token` |
 | `LISTEN_ADDR` | Server listen address and port | `127.0.0.1:8080` |
 
 ### Optional Environment Variables
@@ -29,6 +30,7 @@ The Sealbox server is configured entirely through environment variables.
 # Required settings
 export STORE_PATH="/var/lib/sealbox/sealbox.db"
 export AUTH_TOKEN="$(openssl rand -hex 32)"  # Generate random token
+# Or use AUTH_TOKEN_FILE="/run/secrets/sealbox_auth_token"
 export LISTEN_ADDR="0.0.0.0:8080"
 
 # Optional settings
@@ -75,9 +77,7 @@ The CLI uses a TOML configuration file with environment variable overrides and a
 
 Default location: `~/.config/sealbox/config.toml`
 
-Override with:
-- `--config <path>` command line option
-- `SEALBOX_CONFIG` environment variable
+The path is currently fixed by the CLI.
 
 ### Configuration File Format
 
@@ -155,9 +155,12 @@ CLI configuration can be overridden with environment variables:
 |---------------------|---------------|---------|
 | `SEALBOX_URL` | `server.url` | `http://localhost:8080` |
 | `SEALBOX_TOKEN` | `server.token` | `your-auth-token` |
-| `SEALBOX_OUTPUT` | `output.format` | `json` |
+| `SEALBOX_TOKEN_FILE` | `server.token` read from file | `/run/secrets/sealbox_auth_token` |
+| `SEALBOX_OUTPUT_FORMAT` | `output.format` | `json` |
 | `SEALBOX_PRIVATE_KEY` | `keys.private_key_path` | `/path/to/private.pem` |
 | `SEALBOX_PUBLIC_KEY` | `keys.public_key_path` | `/path/to/public.pem` |
+| `SEALBOX_PRIVATE_KEY_FILE` | mounted private key file path | `/run/secrets/sealbox_private_key.pem` |
+| `SEALBOX_PUBLIC_KEY_FILE` | mounted public key file path | `/run/secrets/sealbox_public_key.pem` |
 
 ### Configuration Priority
 
@@ -210,8 +213,16 @@ For automated environments, use environment variables:
 # .env file or CI/CD variables
 export SEALBOX_URL="https://sealbox.example.com"
 export SEALBOX_TOKEN="${SEALBOX_SECRET_TOKEN}"
-export SEALBOX_OUTPUT="json"
+export SEALBOX_OUTPUT_FORMAT="json"
 export SEALBOX_PRIVATE_KEY="/secrets/sealbox_private_key.pem"
+```
+
+For Docker secrets, prefer file-backed inputs:
+
+```bash
+export SEALBOX_TOKEN_FILE="/run/secrets/sealbox_auth_token"
+export SEALBOX_PRIVATE_KEY_FILE="/run/secrets/sealbox_private_key.pem"
+export SEALBOX_PUBLIC_KEY_FILE="/run/secrets/sealbox_public_key.pem"
 ```
 
 ## Security Considerations
@@ -251,7 +262,7 @@ export SEALBOX_PRIVATE_KEY="/secrets/sealbox_private_key.pem"
    chmod 600 ~/.config/sealbox/config.toml
    ```
 
-3. **Token Storage**: Avoid storing tokens in the config file in shared environments. Use environment variables instead.
+3. **Token Storage**: Avoid storing tokens in the config file in shared environments. Use `SEALBOX_TOKEN_FILE` or `AUTH_TOKEN_FILE` with mounted secret files instead.
 
 ## Troubleshooting Configuration
 

@@ -1,17 +1,17 @@
 # Sealbox Web UI
 
-Sealbox Web UI is a modern React-based web interface for managing secrets through an intuitive browser interface.
+Sealbox Web UI is a modern React-based browser interface for viewing secret metadata, deleting secret versions, and monitoring key status.
 
 ## Features
 
-- 🔐 **Secure Authentication** - Bearer Token authentication with session persistence
-- 📋 **Secret Management** - View, delete secrets with real-time status updates
+- 🔐 **Token Authentication** - Bearer token authentication without localStorage token persistence
+- 📋 **Secret Management** - View metadata and delete secrets with real-time status updates
 - ⏰ **TTL Indicators** - Visual countdown and expiration warnings
 - 📱 **Responsive Design** - Works seamlessly on desktop and mobile devices
 - 🌐 **CORS Support** - Development-friendly cross-origin request handling
 - 🎨 **Modern Industrial UI** - 2025 design following Linear/Superhuman principles with strict 8pt grid system
 - 🌍 **Internationalization** - Support for English, Chinese, Japanese, and German
-- 🚀 **Production Ready** - Optimized builds and proper error handling
+- 🚧 **CLI-first Secret Writes** - Secret creation and key rotation remain CLI workflows because browser-side encryption is not implemented
 
 ## Technology Stack
 
@@ -102,8 +102,8 @@ sealbox-web/
 ### Authentication System
 
 - **Token-based**: Uses Bearer token authentication
-- **Persistent**: Login state persists across browser sessions
-- **Secure**: Tokens stored in localStorage with proper validation
+- **Session scoped**: Server URL can persist, but bearer tokens are not persisted in localStorage
+- **Secure by default**: Refreshing the browser requires re-entering the bearer token
 - **Connection Testing**: Validates server connectivity during login
 
 ### Secret Management
@@ -114,6 +114,7 @@ sealbox-web/
   - 🟡 Warning: Less than 24 hours until expiration
   - 🔴 Critical: Less than 1 hour until expiration
 - **Real-time Updates**: Automatic refresh and status updates
+- **Creation**: Use `sealbox-cli secret set <key>` so plaintext is encrypted locally before upload
 - **Deletion**: Secure deletion with confirmation dialogs
 
 ### User Interface
@@ -162,6 +163,7 @@ The Web UI integrates with all sealbox-server APIs:
 - `GET /v1/secrets/:key` - Get secret details
 - `DELETE /v1/secrets/:key` - Delete secret
 - `GET /v1/master-key` - List master keys
+- `GET /v1/master-key/active` - Fetch active public key metadata
 - `POST /v1/master-key` - Register master key
 
 ### Error Handling
@@ -191,7 +193,7 @@ The Web UI integrates with all sealbox-server APIs:
 
 ## Security Considerations
 
-- **Token Storage**: Secure token handling in localStorage
+- **Token Storage**: Bearer tokens are not persisted in localStorage
 - **CORS**: Properly configured for development/production
 - **Validation**: Input validation on both client and server
 - **HTTPS**: Use HTTPS in production environments

@@ -6,7 +6,6 @@ Complete reference for the Sealbox command-line interface.
 
 All commands support these global options:
 
-- `--config <path>` - Path to configuration file (default: `~/.config/sealbox/config.toml`)
 - `--output <format>` - Output format: `table`, `json`, `yaml` (default: `table`)
 - `--help` - Show help information
 - `--version` - Show version information
@@ -66,13 +65,13 @@ Generate a new RSA key pair for encryption.
 sealbox-cli key generate [OPTIONS]
 ```
 
-**Options:**
-- `--key-size <bits>` - RSA key size (default: 2048)
+- `--public-key-path <path>` - Public key output path
+- `--private-key-path <path>` - Private key output path
 - `--force` - Overwrite existing keys
 
 **Example:**
 ```bash
-sealbox-cli key generate --key-size 4096
+sealbox-cli key generate --force
 ```
 
 ### `key register`
@@ -84,8 +83,10 @@ sealbox-cli key register [OPTIONS]
 ```
 
 **Options:**
-- `--url <url>` - Server URL (overrides config)
-- `--token <token>` - Authentication token (overrides config)
+- `--new-key-id <uuid>` - New registered master key id
+- `--old-key-id <uuid>` - Old active master key id
+
+The CLI decrypts existing encrypted data keys locally with the old private key and sends only rewrapped encrypted data keys to the server.
 
 **Example:**
 ```bash
@@ -222,15 +223,12 @@ sealbox-cli secret delete <key> [OPTIONS]
 - `<key>` - Secret identifier
 
 **Options:**
-- `--version <version>` - Specific version to delete (default: all versions)
+- `--version <version>` - Specific version to delete
 - `--url <url>` - Server URL (overrides config)
 - `--token <token>` - Authentication token (overrides config)
 
 **Examples:**
 ```bash
-# Delete all versions
-sealbox-cli secret delete old_password
-
 # Delete specific version
 sealbox-cli secret delete old_password --version 1
 ```
@@ -374,8 +372,12 @@ CLI commands can be configured using environment variables:
 
 - `SEALBOX_URL` - Server URL
 - `SEALBOX_TOKEN` - Authentication token
-- `SEALBOX_CONFIG` - Configuration file path
-- `SEALBOX_OUTPUT` - Default output format
+- `SEALBOX_TOKEN_FILE` - File containing authentication token
+- `SEALBOX_PUBLIC_KEY` - Public key path
+- `SEALBOX_PRIVATE_KEY` - Private key path
+- `SEALBOX_PUBLIC_KEY_FILE` - Mounted public key file path
+- `SEALBOX_PRIVATE_KEY_FILE` - Mounted private key file path
+- `SEALBOX_OUTPUT_FORMAT` - Default output format
 
 ## Exit Codes
 

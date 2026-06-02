@@ -36,12 +36,28 @@ export interface SecretsListResponse {
 }
 
 export interface CreateSecretRequest {
-  secret: string;
+  encrypted_data: number[];
+  encrypted_data_key: number[];
+  master_key_id: string;
   ttl?: number;
+  metadata?: string;
 }
 
 export interface CreateMasterKeyRequest {
   public_key: string;
+}
+
+export interface RewrappedSecretDataKey {
+  namespace: string;
+  key: string;
+  version: number;
+  encrypted_data_key: number[];
+}
+
+export interface RotateMasterKeyRequest {
+  old_master_key_id: string;
+  new_master_key_id: string;
+  updates: RewrappedSecretDataKey[];
 }
 
 export interface MasterKeysListResponse {

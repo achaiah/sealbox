@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, fs};
 use tracing::{error, info};
 
 /// Sealbox configuration struct
@@ -14,11 +14,11 @@ impl SealboxConfig {
     pub fn from_env() -> Result<Self, String> {
         info!("Loading Sealbox configuration from environment variables...");
 
-        let auth_token = match env::var("AUTH_TOKEN") {
+        let auth_token = match Self::read_env_or_file("AUTH_TOKEN", "AUTH_TOKEN_FILE") {
             Ok(val) if !val.trim().is_empty() => val,
             _ => {
-                error!("Environment variable AUTH_TOKEN is missing or empty");
-                return Err("AUTH_TOKEN is missing or empty".into());
+                error!("Environment variable AUTH_TOKEN or AUTH_TOKEN_FILE is missing or empty");
+                return Err("AUTH_TOKEN or AUTH_TOKEN_FILE is missing or empty".into());
             }
         };
 
@@ -53,6 +53,20 @@ impl SealboxConfig {
             listen_addr,
         })
     }
+
+    fn read_env_or_file(value_var: &str, file_var: &str) -> Result<String, String> {
+        if let Ok(path) = env::var(file_var) {
+            let value = fs::read_to_string(&path)
+                .map_err(|err| format!("failed to read {file_var} path {path}: {err}"))?;
+            return Ok(Self::trim_secret_file_value(value));
+        }
+
+        env::var(value_var).map_err(|err| err.to_string())
+    }
+
+    fn trim_secret_file_value(value: String) -> String {
+        value.trim_end_matches(['\r', '\n']).to_string()
+    }
 }
 
 impl Default for SealboxConfig {
@@ -61,6 +75,35 @@ impl Default for SealboxConfig {
             auth_token: "test-token".to_string(),
             store_path: ":memory:".to_string(),
             listen_addr: "127.0.0.1:8080".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_env_reads_auth_token_file() {
+        let temp_dir = tempfile::tempdir().expect("Should create temp dir");
+        let token_file = temp_dir.path().join("auth_token");
+        fs::write(&token_file, "file-token\n").expect("Should write token file");
+
+        unsafe {
+            std::env::remove_var("AUTH_TOKEN");
+            std::env::set_var("AUTH_TOKEN_FILE", &token_file);
+            std::env::set_var("STORE_PATH", ":memory:");
+            std::env::set_var("LISTEN_ADDR", "127.0.0.1:0");
+        }
+
+        let config = SealboxConfig::from_env().expect("Should load config");
+
+        assert_eq!(config.auth_token, "file-token");
+
+        unsafe {
+            std::env::remove_var("AUTH_TOKEN_FILE");
+            std::env::remove_var("STORE_PATH");
+            std::env::remove_var("LISTEN_ADDR");
         }
     }
 }

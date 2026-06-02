@@ -1,8 +1,13 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use rsa::pkcs1::DecodeRsaPublicKey;
+use sealbox_server::{
+    crypto::master_key::{PrivateMasterKey, PublicMasterKey},
+    repo::{MasterKey, Secret},
+};
+use serde::Deserialize;
 use serde_json::json;
-use std::{fs, path::Path};
+use std::{fs, path::Path, str::FromStr};
 use uuid::Uuid;
 
 use crate::{KeyCommands, config::Config, output::OutputManager};
@@ -175,15 +180,15 @@ async fn list_keys(config: &Config, output: &OutputManager) -> Result<()> {
 
     let status = response.status();
     if status.is_success() {
-        let master_keys: Vec<sealbox_server::repo::MasterKey> = response
+        let result: MasterKeysListResponse = response
             .json()
             .await
             .context("Failed to parse server response")?;
 
-        if master_keys.is_empty() {
+        if result.master_keys.is_empty() {
             output.print_info("No master keys on server");
         } else {
-            output.print_master_keys(&master_keys)?;
+            output.print_master_keys(&result.master_keys)?;
         }
     } else {
         let error_body = response
@@ -198,6 +203,11 @@ async fn list_keys(config: &Config, output: &OutputManager) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct MasterKeysListResponse {
+    master_keys: Vec<MasterKey>,
 }
 
 async fn rotate_keys(
@@ -231,13 +241,47 @@ async fn rotate_keys(
     let old_key_uuid = Uuid::parse_str(&old_key_id)
         .with_context(|| format!("Invalid old key ID format: {old_key_id}"))?;
 
-    output.print_info("Performing key rotation...");
-    output.print_warning("This operation will re-encrypt all secrets using the old key, please ensure the operation is correct!");
+    output.print_info("Preparing local key rotation...");
+    output.print_warning("This operation rewraps encrypted data keys locally and never sends the private key to the server.");
+
+    let new_master_key = fetch_master_key(config, &new_key_uuid).await?;
+    let secrets = fetch_secrets_by_master_key(config, &old_key_uuid).await?;
+    let old_private_key = PrivateMasterKey::from_str(&old_private_key_pem)
+        .context("Failed to parse old private key")?;
+    let new_public_key = PublicMasterKey::from_str(&new_master_key.public_key)
+        .context("Failed to parse new public key")?;
+
+    let updates = secrets
+        .iter()
+        .map(|secret| {
+            let data_key = old_private_key
+                .decrypt(&secret.encrypted_data_key)
+                .with_context(|| {
+                    format!(
+                        "Failed to decrypt data key for '{}' version {}",
+                        secret.key, secret.version
+                    )
+                })?;
+            let encrypted_data_key = new_public_key.encrypt(&data_key).with_context(|| {
+                format!(
+                    "Failed to encrypt data key for '{}' version {}",
+                    secret.key, secret.version
+                )
+            })?;
+
+            Ok(json!({
+                "namespace": secret.namespace,
+                "key": secret.key,
+                "version": secret.version,
+                "encrypted_data_key": encrypted_data_key
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let payload = json!({
         "new_master_key_id": new_key_uuid,
         "old_master_key_id": old_key_uuid,
-        "old_private_key_pem": old_private_key_pem
+        "updates": updates
     });
 
     let client = Client::new();
@@ -258,15 +302,6 @@ async fn rotate_keys(
 
         output.print_success("Key rotation completed!");
         output.print_value(&result)?;
-
-        if let Some(failed_keys) = result.get("failed_secret_keys") {
-            if !failed_keys.as_array().unwrap_or(&vec![]).is_empty() {
-                output.print_warning(
-                    "The following secrets failed to rotate and may need manual handling:",
-                );
-                output.print_value(failed_keys)?;
-            }
-        }
     } else {
         let error_body = response
             .text()
@@ -280,6 +315,74 @@ async fn rotate_keys(
     }
 
     Ok(())
+}
+
+async fn fetch_master_key(config: &Config, master_key_id: &Uuid) -> Result<MasterKey> {
+    let client = Client::new();
+    let response = client
+        .get(format!(
+            "{}/v1/master-key/by-id/{}",
+            config.server.url, master_key_id
+        ))
+        .bearer_auth(&config.server.token)
+        .send()
+        .await
+        .context("Failed to request master key")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to get error information".to_string());
+        anyhow::bail!(
+            "Server returned error while fetching master key (status code: {}):\n{}",
+            status,
+            error_body
+        );
+    }
+
+    response
+        .json()
+        .await
+        .context("Failed to parse master key response")
+}
+
+#[derive(Debug, Deserialize)]
+struct MasterKeySecretsResponse {
+    secrets: Vec<Secret>,
+}
+
+async fn fetch_secrets_by_master_key(config: &Config, master_key_id: &Uuid) -> Result<Vec<Secret>> {
+    let client = Client::new();
+    let response = client
+        .get(format!(
+            "{}/v1/master-key/by-id/{}/secrets",
+            config.server.url, master_key_id
+        ))
+        .bearer_auth(&config.server.token)
+        .send()
+        .await
+        .context("Failed to request secrets for master key")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to get error information".to_string());
+        anyhow::bail!(
+            "Server returned error while fetching secrets for master key (status code: {}):\n{}",
+            status,
+            error_body
+        );
+    }
+
+    let result: MasterKeySecretsResponse = response
+        .json()
+        .await
+        .context("Failed to parse secrets for master key response")?;
+    Ok(result.secrets)
 }
 
 async fn check_key_status(config: &Config, output: &OutputManager) -> Result<()> {
@@ -305,8 +408,6 @@ async fn check_key_status(config: &Config, output: &OutputManager) -> Result<()>
 
     // Check if key pair matches by reading and parsing both key files
     if Path::new(public_key_path).exists() && Path::new(private_key_path).exists() {
-        use std::str::FromStr;
-
         match fs::read_to_string(public_key_path) {
             Ok(public_pem) => match fs::read_to_string(private_key_path) {
                 Ok(private_pem) => {

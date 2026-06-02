@@ -1,14 +1,16 @@
 use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
-    aead::{Aead, AeadCore, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+    aead::{Aead, Generate, KeyInit},
 };
-use rand::Rng;
+use rand::RngExt;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum DataKeyCryptoError {
     #[error("Invalid key length, expected 32 bytes, got {0}")]
     InvalidKeyLength(usize),
+    #[error("Invalid nonce length, expected 12 bytes, got {0}")]
+    InvalidNonceLength(usize),
     #[error("Failed to decrypt")]
     FailedToDecrypt(aes_gcm::Error),
     #[error("Failed to encrypt")]
@@ -42,7 +44,7 @@ impl DataKey {
     /// assert_eq!(data_key.as_bytes().len(), 32);
     /// ```
     pub fn new() -> DataKey {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut data_key = vec![0u8; 32];
         rng.fill(&mut data_key[..]);
         DataKey(data_key)
@@ -92,9 +94,7 @@ impl DataKey {
     ///
     /// Returns configured `Aes256Gcm` cipher instance for subsequent encryption/decryption operations
     pub fn cipher(&self) -> Aes256Gcm {
-        let data_key = self.0.clone();
-        let key = Key::<Aes256Gcm>::from_slice(&data_key);
-        Aes256Gcm::new(key)
+        Aes256Gcm::new_from_slice(&self.0).expect("DataKey always contains 32 bytes")
     }
 
     /// Encrypt data using AES-256-GCM algorithm
@@ -117,7 +117,7 @@ impl DataKey {
     /// - Output format contains 12-byte nonce + ciphertext + 16-byte authentication tag
     pub fn encrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
         // Generate a random nonce (12 bytes)
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce = Nonce::generate();
 
         // Encrypt the data
         let ciphertext = self
@@ -152,12 +152,13 @@ impl DataKey {
     pub fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>> {
         // Split nonce and ciphertext
         let (nonce_bytes, ciphertext) = data.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes)
+            .map_err(|_| DataKeyCryptoError::InvalidNonceLength(nonce_bytes.len()))?;
 
         // Decrypt
         let plaintext = self
             .cipher()
-            .decrypt(nonce, ciphertext)
+            .decrypt(&nonce, ciphertext)
             .map_err(DataKeyCryptoError::FailedToDecrypt)?;
         Ok(plaintext)
     }

@@ -49,9 +49,7 @@ export const useAuthStore = create<AuthStore>()(
     {
       name: "sealbox-auth", // localStorage key
       partialize: (state) => ({
-        token: state.token,
         serverUrl: state.serverUrl,
-        isAuthenticated: state.isAuthenticated,
       }),
     },
   ),

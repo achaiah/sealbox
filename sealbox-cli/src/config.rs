@@ -74,7 +74,7 @@ impl Config {
             .with_context(|| format!("Invalid config file format: {}", config_path.display()))?;
 
         // Apply environment variable overrides
-        config.apply_env_overrides();
+        config.apply_env_overrides()?;
 
         // Expand home directory paths
         config.expand_paths()?;
@@ -113,7 +113,7 @@ impl Config {
         Ok(home_dir.join(".config").join("sealbox"))
     }
 
-    fn apply_env_overrides(&mut self) {
+    fn apply_env_overrides(&mut self) -> Result<()> {
         if let Ok(url) = std::env::var("SEALBOX_URL") {
             self.server.url = url;
         }
@@ -122,12 +122,24 @@ impl Config {
             self.server.token = token;
         }
 
+        if let Ok(token_file) = std::env::var("SEALBOX_TOKEN_FILE") {
+            self.server.token = Self::read_secret_file("SEALBOX_TOKEN_FILE", &token_file)?;
+        }
+
         if let Ok(public_key) = std::env::var("SEALBOX_PUBLIC_KEY") {
             self.keys.public_key_path = PathBuf::from(public_key);
         }
 
+        if let Ok(public_key_file) = std::env::var("SEALBOX_PUBLIC_KEY_FILE") {
+            self.keys.public_key_path = PathBuf::from(public_key_file);
+        }
+
         if let Ok(private_key) = std::env::var("SEALBOX_PRIVATE_KEY") {
             self.keys.private_key_path = PathBuf::from(private_key);
+        }
+
+        if let Ok(private_key_file) = std::env::var("SEALBOX_PRIVATE_KEY_FILE") {
+            self.keys.private_key_path = PathBuf::from(private_key_file);
         }
 
         if let Ok(format) = std::env::var("SEALBOX_OUTPUT_FORMAT") {
@@ -138,6 +150,8 @@ impl Config {
                 _ => {} // Keep default value
             }
         }
+
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -157,13 +171,19 @@ impl Config {
     }
 
     fn expand_home_dir(path: &Path) -> Result<PathBuf> {
-        if let Some(path_str) = path.to_str() {
-            if let Some(stripped) = path_str.strip_prefix("~/") {
-                let home_dir = dirs::home_dir().context("Unable to determine home directory")?;
-                return Ok(home_dir.join(stripped));
-            }
+        if let Some(path_str) = path.to_str()
+            && let Some(stripped) = path_str.strip_prefix("~/")
+        {
+            let home_dir = dirs::home_dir().context("Unable to determine home directory")?;
+            return Ok(home_dir.join(stripped));
         }
         Ok(path.to_path_buf())
+    }
+
+    fn read_secret_file(var_name: &str, path: &str) -> Result<String> {
+        let value = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {var_name}: {path}"))?;
+        Ok(value.trim_end_matches(['\r', '\n']).to_string())
     }
 }
 
@@ -250,7 +270,7 @@ mod tests {
             std::env::set_var("SEALBOX_OUTPUT_FORMAT", "json");
         }
 
-        config.apply_env_overrides();
+        config.apply_env_overrides().unwrap();
 
         assert_eq!(config.server.url, "http://env-test.com");
         assert_eq!(config.server.token, "env-token");
@@ -261,6 +281,38 @@ mod tests {
             std::env::remove_var("SEALBOX_URL");
             std::env::remove_var("SEALBOX_TOKEN");
             std::env::remove_var("SEALBOX_OUTPUT_FORMAT");
+        }
+    }
+
+    #[test]
+    fn test_apply_env_file_overrides() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let token_file = temp_dir.path().join("token");
+        let public_key_file = temp_dir.path().join("public.pem");
+        let private_key_file = temp_dir.path().join("private.pem");
+
+        fs::write(&token_file, "file-token\n").unwrap();
+        fs::write(&public_key_file, "public-key").unwrap();
+        fs::write(&private_key_file, "private-key").unwrap();
+
+        let mut config = Config::default();
+
+        unsafe {
+            std::env::set_var("SEALBOX_TOKEN_FILE", &token_file);
+            std::env::set_var("SEALBOX_PUBLIC_KEY_FILE", &public_key_file);
+            std::env::set_var("SEALBOX_PRIVATE_KEY_FILE", &private_key_file);
+        }
+
+        config.apply_env_overrides().unwrap();
+
+        assert_eq!(config.server.token, "file-token");
+        assert_eq!(config.keys.public_key_path, public_key_file);
+        assert_eq!(config.keys.private_key_path, private_key_file);
+
+        unsafe {
+            std::env::remove_var("SEALBOX_TOKEN_FILE");
+            std::env::remove_var("SEALBOX_PUBLIC_KEY_FILE");
+            std::env::remove_var("SEALBOX_PRIVATE_KEY_FILE");
         }
     }
 

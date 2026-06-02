@@ -4,7 +4,7 @@ This guide will walk you through setting up and using Sealbox for secure secret 
 
 ## Prerequisites
 
-- Rust 1.85+ (for building from source)
+- Rust 1.95+ (for building from source)
 - A Unix-like system (Linux, macOS)
 
 ## Step 1: Build Sealbox
@@ -33,6 +33,7 @@ mkdir -p /var/lib/sealbox
 # Set environment variables
 export STORE_PATH=/var/lib/sealbox/sealbox.db
 export AUTH_TOKEN=your-secure-token-here
+# Or use AUTH_TOKEN_FILE=/run/secrets/sealbox_auth_token
 export LISTEN_ADDR=127.0.0.1:8080
 
 # Start the server
@@ -67,7 +68,7 @@ This creates `~/.config/sealbox/config.toml` with your settings.
 
 ## Step 4: Generate Your Key Pair
 
-Generate your RSA key pair for end-to-end encryption:
+Generate your RSA key pair for client-side encryption:
 
 ```bash
 # Generate your private/public key pair
@@ -114,17 +115,17 @@ Now you can securely store secrets:
 
 ## Understanding the Security Model
 
-Sealbox uses **server-side envelope encryption** with **client-side decryption**:
+Sealbox uses **client-side envelope encryption** for CLI writes and reads:
 
 1. **Your private key never leaves your machine** - Generated and stored locally
-2. **CLI sends plaintext secrets** to the server over HTTPS
-3. **Server encrypts using envelope encryption**:
+2. **CLI encrypts secrets locally** before sending them to the server
+3. **Envelope encryption is used for every secret**:
    - Random AES-256-GCM key encrypts your secret
    - Your RSA public key encrypts the AES key
-4. **Server stores encrypted data** - Cannot decrypt without your private key
+4. **Server stores encrypted data** and encrypted data keys
 5. **Only you can decrypt** secrets when retrieving them using your private key
 
-**Key Point**: While secrets are sent as plaintext to the server, only you can decrypt the stored encrypted data.
+**Key Point**: The server should not receive plaintext secret values or private keys during normal CLI operations.
 
 ## TTL (Time-To-Live) Features
 

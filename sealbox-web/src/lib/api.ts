@@ -5,6 +5,7 @@ import type {
   SecretsListResponse,
   CreateSecretRequest,
   CreateMasterKeyRequest,
+  RotateMasterKeyRequest,
   MasterKeysListResponse,
   CleanupExpiredResponse,
   ApiError,
@@ -148,7 +149,7 @@ export class SealboxApi {
     });
   }
 
-  async rotateMasterKey(data: CreateMasterKeyRequest): Promise<void> {
+  async rotateMasterKey(data: RotateMasterKeyRequest): Promise<void> {
     return this.request<void>("/v1/master-key", {
       method: "PUT",
       body: JSON.stringify(data),

@@ -1,13 +1,14 @@
 use axum::extract::{Json, State};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use tracing::error;
 use uuid::Uuid;
 
 use crate::{
     api::{SealboxResponse, Version, path::Path, state::AppState},
     error::{Result, SealboxError},
-    repo::MasterKey,
+    repo::{MasterKey, MasterKeyStatus},
 };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -22,10 +23,30 @@ impl MasterKeyPathParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub(crate) struct MasterKeyIdPathParams {
+    version: Version,
+    master_key_id: Uuid,
+}
+
+impl MasterKeyIdPathParams {
+    fn version(&self) -> Version {
+        self.version.clone()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct RotateMasterKeyPayload {
     new_master_key_id: Uuid,
     old_master_key_id: Uuid,
-    old_private_key_pem: String,
+    updates: Vec<RewrappedSecretDataKey>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub(crate) struct RewrappedSecretDataKey {
+    namespace: String,
+    key: String,
+    version: i32,
+    encrypted_data_key: Vec<u8>,
 }
 
 // GET /{version}/master-key
@@ -37,7 +58,61 @@ pub(crate) async fn list(
         Version::V1 => {
             let conn = state.conn_pool.lock()?;
             let master_keys = state.master_key_repo.fetch_all_master_keys(&conn)?;
-            Ok(SealboxResponse::Json(json!(master_keys)))
+            Ok(SealboxResponse::Json(json!({ "master_keys": master_keys })))
+        }
+        _ => Err(SealboxError::InvalidApiVersion),
+    }
+}
+
+// GET /{version}/master-key/active
+pub(crate) async fn active(
+    State(state): State<AppState>,
+    Path(params): Path<MasterKeyPathParams>,
+) -> Result<SealboxResponse> {
+    match params.version() {
+        Version::V1 => {
+            let conn = state.conn_pool.lock()?;
+            let master_key = state.master_key_repo.get_valid_master_key(&conn)?;
+            Ok(SealboxResponse::Json(json!(master_key)))
+        }
+        _ => Err(SealboxError::InvalidApiVersion),
+    }
+}
+
+// GET /{version}/master-key/by-id/{master_key_id}
+pub(crate) async fn get(
+    State(state): State<AppState>,
+    Path(params): Path<MasterKeyIdPathParams>,
+) -> Result<SealboxResponse> {
+    match params.version() {
+        Version::V1 => {
+            let conn = state.conn_pool.lock()?;
+            let master_key = state
+                .master_key_repo
+                .fetch_master_key(&conn, &params.master_key_id)?
+                .ok_or(SealboxError::MasterKeyNotFound(params.master_key_id))?;
+            Ok(SealboxResponse::Json(json!(master_key)))
+        }
+        _ => Err(SealboxError::InvalidApiVersion),
+    }
+}
+
+// GET /{version}/master-key/by-id/{master_key_id}/secrets
+pub(crate) async fn secrets(
+    State(state): State<AppState>,
+    Path(params): Path<MasterKeyIdPathParams>,
+) -> Result<SealboxResponse> {
+    match params.version() {
+        Version::V1 => {
+            let conn = state.conn_pool.lock()?;
+            let _master_key = state
+                .master_key_repo
+                .fetch_master_key(&conn, &params.master_key_id)?
+                .ok_or(SealboxError::MasterKeyNotFound(params.master_key_id))?;
+            let secrets = state
+                .secret_repo
+                .fetch_secrets_by_master_key(&conn, &params.master_key_id)?;
+            Ok(SealboxResponse::Json(json!({ "secrets": secrets })))
         }
         _ => Err(SealboxError::InvalidApiVersion),
     }
@@ -53,55 +128,86 @@ pub(crate) async fn rotate(
         Version::V1 => {
             let new_master_key_id = payload.new_master_key_id;
             let old_master_key_id = payload.old_master_key_id;
-            let old_private_key_pem = payload.old_private_key_pem;
+            let updates = payload.updates;
+
+            if old_master_key_id == new_master_key_id {
+                return Err(SealboxError::InvalidRequest(
+                    "old and new master key ids must be different".to_string(),
+                ));
+            }
 
             let mut conn = state.conn_pool.lock()?;
 
-            let new_public_key_pem = state
+            let _old_master_key = state
                 .master_key_repo
-                .fetch_public_key(&conn, &new_master_key_id)?
+                .fetch_master_key(&conn, &old_master_key_id)?
+                .ok_or(SealboxError::MasterKeyNotFound(old_master_key_id))?;
+            let _new_master_key = state
+                .master_key_repo
+                .fetch_master_key(&conn, &new_master_key_id)?
                 .ok_or(SealboxError::MasterKeyNotFound(new_master_key_id))?;
 
             let secrets = state
                 .secret_repo
                 .fetch_secrets_by_master_key(&conn, &old_master_key_id)?;
 
-            let mut failed_secret_keys = Vec::new();
+            if updates.len() != secrets.len() {
+                return Err(SealboxError::InvalidRequest(format!(
+                    "expected {} rewrapped data keys, got {}",
+                    secrets.len(),
+                    updates.len()
+                )));
+            }
+
+            let mut updates_by_secret = HashMap::new();
+            for update in updates {
+                let key = (update.namespace, update.key, update.version);
+                if updates_by_secret
+                    .insert(key, update.encrypted_data_key)
+                    .is_some()
+                {
+                    return Err(SealboxError::InvalidRequest(
+                        "duplicate rewrapped secret update".to_string(),
+                    ));
+                }
+            }
 
             let tx = conn.transaction()?;
 
             for secret in secrets {
-                let secret_key = secret.key.clone();
-
-                match secret.rotate_master_key(
-                    &old_master_key_id,
-                    &old_private_key_pem,
-                    &new_master_key_id,
-                    &new_public_key_pem,
-                ) {
-                    Ok(rotated_secret) => {
-                        state
-                            .secret_repo
-                            .update_secret_master_key(&tx, &rotated_secret)?;
-                    }
-                    Err(err) => {
-                        failed_secret_keys.push(secret_key.clone());
-                        error!(
-                            "Failed to rotate master key for secret {}: {}",
-                            secret_key, err
-                        );
-                    }
+                let update_key = (secret.namespace.clone(), secret.key.clone(), secret.version);
+                let Some(encrypted_data_key) = updates_by_secret.remove(&update_key) else {
+                    return Err(SealboxError::InvalidRequest(format!(
+                        "missing rewrapped data key for {} version {}",
+                        secret.key, secret.version
+                    )));
+                };
+                let mut rotated_secret = secret;
+                rotated_secret.encrypted_data_key = encrypted_data_key;
+                rotated_secret.master_key_id = new_master_key_id;
+                rotated_secret.updated_at = time::OffsetDateTime::now_utc().unix_timestamp();
+                if let Err(err) = state
+                    .secret_repo
+                    .update_secret_master_key(&tx, &rotated_secret)
+                {
+                    error!(
+                        "Failed to update rewrapped data key for secret {}: {}",
+                        rotated_secret.key, err
+                    );
+                    return Err(err);
                 }
             }
 
-            tx.commit()?;
+            tx.execute(
+                "UPDATE master_keys SET status = ?1 WHERE id = ?2",
+                rusqlite::params![MasterKeyStatus::Retired, old_master_key_id],
+            )?;
+            tx.execute(
+                "UPDATE master_keys SET status = ?1 WHERE id = ?2",
+                rusqlite::params![MasterKeyStatus::Active, new_master_key_id],
+            )?;
 
-            if !failed_secret_keys.is_empty() {
-                return Ok(SealboxResponse::Json(json!({
-                  "master_key": new_master_key_id,
-                  "failed_secret_keys": failed_secret_keys
-                })));
-            }
+            tx.commit()?;
 
             Ok(SealboxResponse::Json(
                 json!({ "master_key": new_master_key_id }),
@@ -125,7 +231,10 @@ pub(crate) async fn create(
     match params.version() {
         Version::V1 => {
             let conn = state.conn_pool.lock()?;
-            let master_key = MasterKey::new(payload.public_key)?;
+            let mut master_key = MasterKey::new(payload.public_key)?;
+            if state.master_key_repo.get_valid_master_key(&conn).is_ok() {
+                master_key.status = MasterKeyStatus::Retired;
+            }
             state
                 .master_key_repo
                 .create_master_key(&conn, &master_key)?;
@@ -224,8 +333,10 @@ mod tests {
         assert!(result.is_ok());
         match result.unwrap() {
             SealboxResponse::Json(json_value) => {
-                let keys: Vec<MasterKey> =
-                    serde_json::from_value(json_value).expect("Should deserialize Vec<MasterKey>");
+                let keys = json_value
+                    .get("master_keys")
+                    .and_then(|value| value.as_array())
+                    .expect("Should include master_keys");
                 assert_eq!(keys.len(), 0);
             }
             _ => panic!("Expected JSON response"),
@@ -259,10 +370,87 @@ mod tests {
         assert!(result.is_ok());
         match result.unwrap() {
             SealboxResponse::Json(json_value) => {
-                let keys: Vec<MasterKey> =
-                    serde_json::from_value(json_value).expect("Should deserialize Vec<MasterKey>");
+                let keys: Vec<MasterKey> = serde_json::from_value(
+                    json_value
+                        .get("master_keys")
+                        .expect("Should include master_keys")
+                        .clone(),
+                )
+                .expect("Should deserialize Vec<MasterKey>");
                 assert_eq!(keys.len(), 1);
                 assert_eq!(keys[0].public_key, "[HIDDEN]"); // Public key is hidden in list API for security
+            }
+            _ => panic!("Expected JSON response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_active_master_key_returns_public_key() {
+        let state = setup_test_state();
+        let (_, public_pem) = generate_key_pair().expect("Should generate key pair");
+        let path_params = MasterKeyPathParams {
+            version: Version::V1,
+        };
+
+        create(
+            State(state.clone()),
+            Path(path_params.clone()),
+            Json(CreateMasterKeyPayload {
+                public_key: public_pem.clone(),
+            }),
+        )
+        .await
+        .expect("Should create master key");
+
+        let result = active(State(state), Path(path_params))
+            .await
+            .expect("Should fetch active master key");
+
+        match result {
+            SealboxResponse::Json(json_value) => {
+                let master_key: MasterKey =
+                    serde_json::from_value(json_value).expect("Should deserialize MasterKey");
+                assert_eq!(master_key.public_key, public_pem);
+                assert!(matches!(master_key.status, MasterKeyStatus::Active));
+            }
+            _ => panic!("Expected JSON response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_second_master_key_is_retired() {
+        let state = setup_test_state();
+        let (_, first_public_pem) = generate_key_pair().expect("Should generate first key pair");
+        let (_, second_public_pem) = generate_key_pair().expect("Should generate second key pair");
+        let path_params = MasterKeyPathParams {
+            version: Version::V1,
+        };
+
+        create(
+            State(state.clone()),
+            Path(path_params.clone()),
+            Json(CreateMasterKeyPayload {
+                public_key: first_public_pem,
+            }),
+        )
+        .await
+        .expect("Should create first master key");
+
+        let result = create(
+            State(state),
+            Path(path_params),
+            Json(CreateMasterKeyPayload {
+                public_key: second_public_pem,
+            }),
+        )
+        .await
+        .expect("Should create second master key");
+
+        match result {
+            SealboxResponse::Json(json_value) => {
+                let master_key: MasterKey =
+                    serde_json::from_value(json_value).expect("Should deserialize MasterKey");
+                assert!(matches!(master_key.status, MasterKeyStatus::Retired));
             }
             _ => panic!("Expected JSON response"),
         }
@@ -287,7 +475,6 @@ mod tests {
     #[tokio::test]
     async fn test_rotate_master_key_not_found() {
         let state = setup_test_state();
-        let (old_private_pem, _) = generate_key_pair().expect("Should generate old key pair");
         let old_master_key_id = uuid::Uuid::new_v4();
         let new_master_key_id = uuid::Uuid::new_v4();
 
@@ -297,7 +484,7 @@ mod tests {
         let payload = RotateMasterKeyPayload {
             old_master_key_id,
             new_master_key_id,
-            old_private_key_pem: old_private_pem,
+            updates: Vec::new(),
         };
 
         let result = rotate(State(state), SealboxPath(path_params), Json(payload)).await;
@@ -312,7 +499,6 @@ mod tests {
     #[tokio::test]
     async fn test_rotate_master_key_invalid_version() {
         let state = setup_test_state();
-        let (old_private_pem, _) = generate_key_pair().expect("Should generate old key pair");
         let old_master_key_id = uuid::Uuid::new_v4();
         let new_master_key_id = uuid::Uuid::new_v4();
 
@@ -322,7 +508,7 @@ mod tests {
         let payload = RotateMasterKeyPayload {
             old_master_key_id,
             new_master_key_id,
-            old_private_key_pem: old_private_pem,
+            updates: Vec::new(),
         };
 
         let result = rotate(State(state), SealboxPath(path_params), Json(payload)).await;

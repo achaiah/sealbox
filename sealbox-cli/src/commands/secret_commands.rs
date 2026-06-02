@@ -1,5 +1,10 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
+use sealbox_server::{
+    crypto::{data_key::DataKey, master_key::PublicMasterKey},
+    repo::MasterKey,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{fs, str::FromStr};
 
@@ -51,11 +56,25 @@ async fn set_secret(
         anyhow::bail!("Secret value cannot be empty");
     }
 
-    // Send plaintext to server (server will handle encryption)
-    output.print_info("Saving to server...");
+    output.print_info("Fetching active master key...");
+
+    let master_key = fetch_active_master_key(config).await?;
+    let public_key = PublicMasterKey::from_str(&master_key.public_key)
+        .context("Failed to parse active master public key")?;
+    let data_key = DataKey::new();
+    let encrypted_data = data_key
+        .encrypt(secret_value.as_bytes())
+        .context("Failed to encrypt secret locally")?;
+    let encrypted_data_key = public_key
+        .encrypt(data_key.as_bytes())
+        .context("Failed to encrypt data key")?;
+
+    output.print_info("Saving encrypted secret to server...");
 
     let payload = json!({
-        "secret": secret_value,
+        "encrypted_data": encrypted_data,
+        "encrypted_data_key": encrypted_data_key,
+        "master_key_id": master_key.id,
         "ttl": ttl
     });
 
@@ -90,6 +109,34 @@ async fn set_secret(
     }
 
     Ok(())
+}
+
+async fn fetch_active_master_key(config: &Config) -> Result<MasterKey> {
+    let client = Client::new();
+    let response = client
+        .get(format!("{}/v1/master-key/active", config.server.url))
+        .bearer_auth(&config.server.token)
+        .send()
+        .await
+        .context("Failed to request active master key")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to get error information".to_string());
+        anyhow::bail!(
+            "Server returned error while fetching active master key (status code: {}):\n{}",
+            status,
+            error_body
+        );
+    }
+
+    response
+        .json()
+        .await
+        .context("Failed to parse active master key response")
 }
 
 async fn get_secret(
@@ -248,10 +295,50 @@ async fn delete_secret(
     Ok(())
 }
 
-async fn list_secrets(_config: &Config, output: &OutputManager) -> Result<()> {
-    // Note: Current server API doesn't support listing all secrets, this is a reserved feature
-    output.print_warning("Server does not currently support listing all secrets");
-    output.print_info("To view a specific secret, use: sealbox secret get <key>");
+#[derive(Debug, Deserialize)]
+struct ListSecretsResponse {
+    secrets: Vec<sealbox_server::repo::SecretInfo>,
+}
+
+async fn list_secrets(config: &Config, output: &OutputManager) -> Result<()> {
+    config
+        .validate()
+        .context("Configuration validation failed")?;
+
+    output.print_info("Fetching secret list...");
+
+    let client = Client::new();
+    let response = client
+        .get(format!("{}/v1/secrets", config.server.url))
+        .bearer_auth(&config.server.token)
+        .send()
+        .await
+        .context("Failed to request server")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to get error information".to_string());
+        anyhow::bail!(
+            "Server returned error (status code: {}):\n{}",
+            status,
+            error_body
+        );
+    }
+
+    let result: ListSecretsResponse = response
+        .json()
+        .await
+        .context("Failed to parse server response")?;
+
+    if result.secrets.is_empty() {
+        output.print_info("No secrets found");
+    } else {
+        output.print_secret_infos(&result.secrets)?;
+    }
+
     Ok(())
 }
 

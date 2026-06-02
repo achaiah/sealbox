@@ -1,10 +1,12 @@
 use axum::extract::{Json, Query, State};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::{
     api::{SealboxResponse, Version, path::Path, state::AppState},
     error::{Result, SealboxError},
+    repo::EncryptedSecretInput,
 };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -79,8 +81,11 @@ pub(crate) async fn get(
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct SaveSecretPayload {
-    secret: String, // Now receives plaintext instead of encrypted data
+    encrypted_data: Vec<u8>,
+    encrypted_data_key: Vec<u8>,
+    master_key_id: Uuid,
     ttl: Option<i64>,
+    metadata: Option<String>,
 }
 
 // PUT /{version}/secrets/{secret_key}
@@ -94,12 +99,23 @@ pub(crate) async fn save(
             let mut conn = state.conn_pool.lock()?;
             let master_key = state.master_key_repo.get_valid_master_key(&conn)?;
 
-            let secret = state.secret_repo.create_new_version(
+            if payload.master_key_id != master_key.id {
+                return Err(SealboxError::InvalidRequest(format!(
+                    "payload master_key_id {} is not the active master key",
+                    payload.master_key_id
+                )));
+            }
+
+            let secret = state.secret_repo.create_new_encrypted_version(
                 &mut conn,
                 &params.secret_key(),
-                &payload.secret,
-                master_key,
-                payload.ttl,
+                EncryptedSecretInput {
+                    encrypted_data: payload.encrypted_data,
+                    encrypted_data_key: payload.encrypted_data_key,
+                    master_key_id: payload.master_key_id,
+                    ttl: payload.ttl,
+                    metadata: payload.metadata,
+                },
             )?;
 
             Ok(SealboxResponse::Json(json!(secret)))

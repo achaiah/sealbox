@@ -39,6 +39,9 @@ pub enum SealboxError {
     #[error("Invalid API version")]
     InvalidApiVersion,
 
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
+
     #[error("Unknown error")]
     Unknown,
 }
@@ -65,6 +68,7 @@ impl IntoResponse for SealboxError {
             }
             SealboxError::Unauthorized => (StatusCode::UNAUTHORIZED, errorfmt(&self)),
             SealboxError::InvalidApiVersion => (StatusCode::NOT_FOUND, errorfmt(&self)),
+            SealboxError::InvalidRequest(_) => (StatusCode::BAD_REQUEST, errorfmt(&self)),
             SealboxError::Unknown => (StatusCode::INTERNAL_SERVER_ERROR, errorfmt(&self)),
         };
 

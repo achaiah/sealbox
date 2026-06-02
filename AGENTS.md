@@ -1,10 +1,10 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents when working with code in this repository.
 
 ## Project Overview
 
-Sealbox is a lightweight, single-node secret storage service built in Rust. It provides envelope encryption with end-to-end encryption (E2EE) using RSA key pairs, stores data in SQLite, and exposes a REST API for secret management.
+Sealbox is a lightweight, single-node secret storage service built in Rust. It provides client-side envelope encryption using RSA key pairs, stores encrypted data in SQLite, and exposes a REST API for secret management.
 
 ### Key Architecture Components
 
@@ -22,10 +22,10 @@ Sealbox is a lightweight, single-node secret storage service built in Rust. It p
   - **Note**: CLI reuses server's crypto modules for consistency
 
 ### Security Model
-- **Server-side encryption**: CLI sends plaintext to server, server performs envelope encryption
-- **Envelope encryption**: Secrets encrypted with random data keys, data keys encrypted with user's public key
+- **Client-side encryption**: CLI encrypts secret values before sending them to the server
+- **Envelope encryption**: Secrets are encrypted with random data keys, data keys are encrypted with the active public key
 - **RSA + AES-GCM**: 2048-bit RSA for key encryption, AES-256-GCM for data encryption
-- **End-to-end security**: Only clients with private keys can decrypt stored secrets
+- **Private-key locality**: Only clients with private keys can decrypt stored secrets or rewrap data keys during rotation
 
 ## Web UI and CLI Collaboration
 
@@ -39,7 +39,7 @@ Sealbox follows a **hybrid approach** where CLI and Web UI work together:
 - **Bulk Operations**: Import/export large datasets
 
 ### Web UI Responsibilities (Visual Management)
-- **Secret Management**: Create, list, delete secrets
+- **Secret Management**: List and delete secrets; creation remains CLI-first until browser-side encryption exists
 - **Status Monitoring**: View key status and secret metadata
 - **Search & Filter**: Find secrets quickly
 - **TTL Management**: Monitor expiration times
@@ -199,7 +199,7 @@ The CLI uses TOML configuration files with environment variable overrides:
 ### Completed Features
 - ✅ Complete CLI architecture with robust configuration management
 - ✅ Full key management command set (generate, register, list, rotate, status)
-- ✅ Secret management with server-side encryption and client-side decryption
+- ✅ Secret management with client-side encryption and client-side decryption
 - ✅ **TTL (Time-To-Live) support** - Lazy cleanup with automatic expiration
   - Secrets can be created with optional TTL (time in seconds)
   - Expired secrets are automatically deleted when accessed

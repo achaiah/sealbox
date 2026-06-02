@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{Result, SealboxError},
-    repo::{Secret, SecretRepo},
+    repo::{EncryptedSecretInput, Secret, SecretRepo},
 };
 
 #[derive(Debug, Clone)]
@@ -35,6 +35,18 @@ impl SqliteSecretRepo {
 }
 
 impl SqliteSecretRepo {
+    fn cleanup_expired_for_key(tx: &rusqlite::Transaction, key: &str) -> Result<()> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        tx.execute(
+            "DELETE FROM secrets
+             WHERE key = ?1
+               AND expires_at IS NOT NULL
+               AND expires_at < ?2",
+            (key, now),
+        )?;
+        Ok(())
+    }
+
     /// Helper function to check expiry and clean up expired secrets atomically
     fn check_and_cleanup_expired(
         tx: &rusqlite::Transaction,
@@ -45,8 +57,8 @@ impl SqliteSecretRepo {
             if expires_at < now {
                 // Secret has expired, delete it atomically within transaction
                 tx.execute(
-                    "DELETE FROM secrets WHERE key = ?1 AND version = ?2",
-                    [&secret.key, &secret.version.to_string()],
+                    "DELETE FROM secrets WHERE namespace = ?1 AND key = ?2 AND version = ?3",
+                    rusqlite::params![&secret.namespace, &secret.key, &secret.version],
                 )?;
                 info!(
                     "Secret '{}' version {} has expired and been deleted",
@@ -67,6 +79,8 @@ impl SqliteSecretRepo {
         key: &str,
     ) -> Result<Secret> {
         let tx = conn.transaction()?;
+
+        Self::cleanup_expired_for_key(&tx, key)?;
 
         let row = {
             let mut stmt = tx.prepare_cached(query)?;
@@ -151,6 +165,7 @@ impl SecretRepo for SqliteSecretRepo {
         )
     }
 
+    #[cfg(test)]
     fn create_new_version(
         &self,
         conn: &mut rusqlite::Connection,
@@ -171,6 +186,65 @@ impl SecretRepo for SqliteSecretRepo {
         };
 
         let secret = Secret::new(key, data, master_key, next_version, ttl)?;
+
+        tx.execute(
+            "INSERT INTO secrets (
+              namespace,
+              key,
+              version,
+              encrypted_data,
+              encrypted_data_key,
+              master_key_id,
+              created_at,
+              updated_at,
+              expires_at,
+              metadata
+          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (
+                &secret.namespace,
+                &secret.key,
+                &secret.version,
+                &secret.encrypted_data,
+                &secret.encrypted_data_key,
+                &secret.master_key_id,
+                &secret.created_at,
+                &secret.updated_at,
+                &secret.expires_at,
+                &secret.metadata,
+            ),
+        )?;
+
+        tx.commit()?;
+
+        Ok(secret)
+    }
+
+    fn create_new_encrypted_version(
+        &self,
+        conn: &mut rusqlite::Connection,
+        key: &str,
+        input: EncryptedSecretInput,
+    ) -> Result<Secret> {
+        info!("create_new_encrypted_version");
+
+        let tx = conn.transaction()?;
+
+        let next_version = {
+            let mut stmt =
+                tx.prepare("SELECT COALESCE(MAX(version), 0) FROM secrets WHERE key = ?1")?;
+            let latest_version: i32 = stmt.query_one([key], |row| row.get(0))?;
+            latest_version + 1
+        };
+
+        let secret = Secret::from_encrypted(
+            key,
+            input.encrypted_data,
+            input.encrypted_data_key,
+            input.master_key_id,
+            next_version,
+            input.ttl,
+            input.metadata,
+        )?;
 
         tx.execute(
             "INSERT INTO secrets (
@@ -286,13 +360,25 @@ impl SecretRepo for SqliteSecretRepo {
         let mut stmt = conn.prepare(
             "SELECT 
                 key,
-                MAX(version) as version,
+                version,
                 created_at,
-                MAX(updated_at) as updated_at,
+                updated_at,
                 expires_at
-            FROM secrets 
-            WHERE expires_at IS NULL OR expires_at > ?1
-            GROUP BY key
+            FROM (
+                SELECT
+                    key,
+                    version,
+                    created_at,
+                    updated_at,
+                    expires_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY namespace, key
+                        ORDER BY version DESC
+                    ) AS row_num
+                FROM secrets
+                WHERE expires_at IS NULL OR expires_at > ?1
+            )
+            WHERE row_num = 1
             ORDER BY updated_at DESC",
         )?;
 
@@ -739,6 +825,48 @@ mod tests {
     }
 
     #[test]
+    fn test_latest_expired_version_falls_back_to_previous_valid_version() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+        let master_key = create_test_master_key();
+        let mut conn_mut = conn;
+
+        let secret_v1 = repo
+            .create_new_version(
+                &mut conn_mut,
+                "rotating-secret",
+                "permanent-data",
+                master_key.clone(),
+                None,
+            )
+            .expect("Should create permanent version");
+
+        let secret_v2 = repo
+            .create_new_version(
+                &mut conn_mut,
+                "rotating-secret",
+                "temporary-data",
+                master_key,
+                Some(3600),
+            )
+            .expect("Should create temporary version");
+
+        let expired_at = time::OffsetDateTime::now_utc().unix_timestamp() - 1;
+        conn_mut
+            .execute(
+                "UPDATE secrets SET expires_at = ?1 WHERE key = ?2 AND version = ?3",
+                (expired_at, "rotating-secret", secret_v2.version),
+            )
+            .expect("Should expire latest version");
+
+        let latest = repo
+            .get_secret(&mut conn_mut, "rotating-secret")
+            .expect("Should fall back to previous valid version");
+
+        assert_eq!(latest.version, secret_v1.version);
+    }
+
+    #[test]
     fn test_cleanup_expired_secrets() {
         let conn = setup_test_db();
         let repo = SqliteSecretRepo;
@@ -913,6 +1041,44 @@ mod tests {
             assert!(secret_info.updated_at > 0);
             assert!(secret_info.updated_at >= secret_info.created_at);
         }
+    }
+
+    #[test]
+    fn test_list_secrets_metadata_comes_from_latest_row() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+        let master_key = create_test_master_key();
+        let mut conn_mut = conn;
+
+        let _secret_v1 = repo
+            .create_new_version(
+                &mut conn_mut,
+                "metadata-secret",
+                "data-v1",
+                master_key.clone(),
+                None,
+            )
+            .expect("Should create version 1");
+        let secret_v2 = repo
+            .create_new_version(
+                &mut conn_mut,
+                "metadata-secret",
+                "data-v2",
+                master_key,
+                Some(3600),
+            )
+            .expect("Should create version 2");
+
+        let secret_list = repo.list_secrets(&conn_mut).expect("Should list secrets");
+        let secret_info = secret_list
+            .iter()
+            .find(|secret| secret.key == "metadata-secret")
+            .expect("Should find metadata-secret");
+
+        assert_eq!(secret_info.version, secret_v2.version);
+        assert_eq!(secret_info.created_at, secret_v2.created_at);
+        assert_eq!(secret_info.updated_at, secret_v2.updated_at);
+        assert_eq!(secret_info.expires_at, secret_v2.expires_at);
     }
 
     #[test]

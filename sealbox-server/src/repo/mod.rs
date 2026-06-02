@@ -1,16 +1,13 @@
+#[cfg(test)]
 use std::str::FromStr;
 
 use rusqlite::{ToSql, types::FromSql};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{
-    crypto::{
-        data_key::DataKey,
-        master_key::{PrivateMasterKey, PublicMasterKey},
-    },
-    error::{Result, SealboxError},
-};
+#[cfg(test)]
+use crate::crypto::{data_key::DataKey, master_key::PublicMasterKey};
+use crate::error::Result;
 
 pub(crate) use self::sqlite::{
     SqliteHealthRepo, SqliteMasterKeyRepo, SqliteSecretRepo, create_db_connection,
@@ -41,6 +38,14 @@ pub struct Secret {
     pub metadata: Option<String>,    // Optional metadata in serialized format
 }
 
+pub(crate) struct EncryptedSecretInput {
+    pub encrypted_data: Vec<u8>,
+    pub encrypted_data_key: Vec<u8>,
+    pub master_key_id: Uuid,
+    pub ttl: Option<i64>,
+    pub metadata: Option<String>,
+}
+
 impl Secret {
     /// Creates a new `Secret` instance by encrypting the provided data with a randomly generated data key,
     /// and then encrypting that data key with the provided master key's public key.
@@ -63,6 +68,7 @@ impl Secret {
     /// 4. Encrypts the data key using the provided master key's public key.
     /// 5. Sets the creation and update timestamps to the current time.
     /// 6. Constructs and returns the new `Secret` instance.
+    #[cfg(test)]
     pub(crate) fn new(
         key: &str,
         data: &str,
@@ -96,38 +102,30 @@ impl Secret {
         })
     }
 
-    pub(crate) fn rotate_master_key(
-        self,
-        old_master_key_id: &Uuid,
-        old_private_key_pem: &str,
-        new_master_key_id: &Uuid,
-        new_public_key_pem: &str,
+    pub(crate) fn from_encrypted(
+        key: &str,
+        encrypted_data: Vec<u8>,
+        encrypted_data_key: Vec<u8>,
+        master_key_id: Uuid,
+        version: i32,
+        ttl: Option<i64>,
+        metadata: Option<String>,
     ) -> Result<Self> {
-        let mut secret = self.clone();
+        let now_timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
+        let expires_at = ttl.map(|ttl| now_timestamp + ttl);
 
-        if secret.master_key_id == *new_master_key_id {
-            return Ok(secret);
-        }
-
-        if secret.master_key_id != *old_master_key_id {
-            return Err(SealboxError::MasterKeyMismatch(
-                secret.key,
-                old_master_key_id.to_string(),
-                secret.master_key_id.to_string(),
-            ));
-        }
-
-        let old_priv_key = PrivateMasterKey::from_str(old_private_key_pem)?;
-        let new_pub_key = PublicMasterKey::from_str(new_public_key_pem)?;
-
-        let data_key = old_priv_key.decrypt(&secret.encrypted_data_key)?;
-        let new_encrypted_data_key = new_pub_key.encrypt(&data_key)?;
-
-        secret.encrypted_data_key = new_encrypted_data_key;
-        secret.master_key_id = *new_master_key_id;
-        secret.updated_at = time::OffsetDateTime::now_utc().unix_timestamp();
-
-        Ok(secret)
+        Ok(Self {
+            namespace: String::new(),
+            key: key.to_string(),
+            version,
+            encrypted_data,
+            encrypted_data_key,
+            master_key_id,
+            created_at: now_timestamp,
+            updated_at: now_timestamp,
+            expires_at,
+            metadata,
+        })
     }
 }
 
@@ -141,6 +139,7 @@ pub(crate) trait SecretRepo: Send + Sync {
         key: &str,
         version: i32,
     ) -> Result<Secret>;
+    #[cfg(test)]
     fn create_new_version(
         &self,
         conn: &mut rusqlite::Connection,
@@ -148,6 +147,12 @@ pub(crate) trait SecretRepo: Send + Sync {
         data: &str,
         master_key: MasterKey,
         ttl: Option<i64>,
+    ) -> Result<Secret>;
+    fn create_new_encrypted_version(
+        &self,
+        conn: &mut rusqlite::Connection,
+        key: &str,
+        input: EncryptedSecretInput,
     ) -> Result<Secret>;
     fn delete_secret_by_version(
         &self,
@@ -177,7 +182,7 @@ pub enum MasterKeyStatus {
     Disabled,
 }
 impl ToSql for MasterKeyStatus {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput> {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         match self {
             MasterKeyStatus::Active => Ok(rusqlite::types::ToSqlOutput::from("Active")),
             MasterKeyStatus::Retired => Ok(rusqlite::types::ToSqlOutput::from("Retired")),
@@ -230,13 +235,11 @@ impl MasterKey {
 pub(crate) trait MasterKeyRepo: Send + Sync {
     fn create_master_key(&self, conn: &rusqlite::Connection, key: &MasterKey) -> Result<()>;
     fn fetch_all_master_keys(&self, conn: &rusqlite::Connection) -> Result<Vec<MasterKey>>;
-
-    /// Fetch the PEM-encoded public key for a given master_key_id.
-    fn fetch_public_key(
+    fn fetch_master_key(
         &self,
         conn: &rusqlite::Connection,
         master_key_id: &Uuid,
-    ) -> Result<Option<String>>;
+    ) -> Result<Option<MasterKey>>;
 
     /// Fetch a valid master key.
     fn get_valid_master_key(&self, conn: &rusqlite::Connection) -> Result<MasterKey>;
@@ -331,121 +334,6 @@ mod tests {
         // Even with same data, encrypted results should be different due to random data keys
         assert_ne!(secret1.encrypted_data, secret2.encrypted_data);
         assert_ne!(secret1.encrypted_data_key, secret2.encrypted_data_key);
-    }
-
-    #[test]
-    fn test_secret_rotate_master_key() {
-        let (old_private_pem, old_public_pem) =
-            generate_key_pair().expect("Should generate old key pair");
-        let (_, new_public_pem) = generate_key_pair().expect("Should generate new key pair");
-
-        let old_master_key = MasterKey::new(old_public_pem).expect("Should create old master key");
-        let new_master_key = MasterKey::new(new_public_pem).expect("Should create new master key");
-
-        let original_secret =
-            Secret::new("test-key", "secret-data", old_master_key.clone(), 1, None)
-                .expect("Should create secret");
-
-        let original_created_at = original_secret.created_at;
-        let original_encrypted_data = original_secret.encrypted_data.clone();
-        let original_encrypted_data_key = original_secret.encrypted_data_key.clone();
-
-        let rotated_secret = original_secret
-            .rotate_master_key(
-                &old_master_key.id,
-                &old_private_pem,
-                &new_master_key.id,
-                &new_master_key.public_key,
-            )
-            .expect("Should rotate master key");
-
-        // Key rotation should update master key ID and encrypted data key
-        assert_eq!(rotated_secret.master_key_id, new_master_key.id);
-        assert_ne!(
-            rotated_secret.encrypted_data_key,
-            original_encrypted_data_key
-        );
-        assert_eq!(rotated_secret.encrypted_data, original_encrypted_data); // Data itself unchanged
-        assert!(rotated_secret.updated_at >= original_created_at);
-    }
-
-    #[test]
-    fn test_secret_rotate_master_key_same_key() {
-        let (_, public_pem) = generate_key_pair().expect("Should generate key pair");
-        let master_key = MasterKey::new(public_pem).expect("Should create master key");
-
-        let original_secret = Secret::new("test-key", "secret-data", master_key.clone(), 1, None)
-            .expect("Should create secret");
-
-        // Rotating to the same key should return the secret unchanged
-        let rotated_secret = original_secret
-            .clone()
-            .rotate_master_key(
-                &master_key.id,
-                "dummy-private-key",
-                &master_key.id,
-                &master_key.public_key,
-            )
-            .expect("Should handle same key rotation");
-
-        assert_eq!(rotated_secret.master_key_id, original_secret.master_key_id);
-        assert_eq!(
-            rotated_secret.encrypted_data_key,
-            original_secret.encrypted_data_key
-        );
-    }
-
-    #[test]
-    fn test_secret_rotate_master_key_wrong_old_key() {
-        let (old_private_pem, old_public_pem) =
-            generate_key_pair().expect("Should generate old key pair");
-        let (_, new_public_pem) = generate_key_pair().expect("Should generate new key pair");
-        let (_, wrong_public_pem) = generate_key_pair().expect("Should generate wrong key pair");
-
-        let old_master_key = MasterKey::new(old_public_pem).expect("Should create old master key");
-        let new_master_key = MasterKey::new(new_public_pem).expect("Should create new master key");
-        let wrong_master_key =
-            MasterKey::new(wrong_public_pem).expect("Should create wrong master key");
-
-        let original_secret = Secret::new("test-key", "secret-data", old_master_key, 1, None)
-            .expect("Should create secret");
-
-        // Trying to rotate with wrong old key ID should fail
-        let result = original_secret.rotate_master_key(
-            &wrong_master_key.id, // Wrong old key ID
-            &old_private_pem,
-            &new_master_key.id,
-            &new_master_key.public_key,
-        );
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            SealboxError::MasterKeyMismatch(_, _, _) => {} // Expected
-            _ => panic!("Expected MasterKeyMismatch error"),
-        }
-    }
-
-    #[test]
-    fn test_secret_rotate_master_key_invalid_private_key() {
-        let (_, old_public_pem) = generate_key_pair().expect("Should generate old key pair");
-        let (_, new_public_pem) = generate_key_pair().expect("Should generate new key pair");
-
-        let old_master_key = MasterKey::new(old_public_pem).expect("Should create old master key");
-        let new_master_key = MasterKey::new(new_public_pem).expect("Should create new master key");
-
-        let original_secret =
-            Secret::new("test-key", "secret-data", old_master_key.clone(), 1, None)
-                .expect("Should create secret");
-
-        // Invalid private key should cause rotation to fail
-        let result = original_secret.rotate_master_key(
-            &old_master_key.id,
-            "invalid-private-key",
-            &new_master_key.id,
-            &new_master_key.public_key,
-        );
-
-        assert!(result.is_err());
     }
 
     #[test]

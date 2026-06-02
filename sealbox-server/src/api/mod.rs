@@ -93,6 +93,15 @@ pub fn create_app(config: &SealboxConfig) -> Result<Router> {
                 .put(master_key::rotate)
                 .post(master_key::create),
         )
+        .route("/{version}/master-key/active", get(master_key::active))
+        .route(
+            "/{version}/master-key/by-id/{master_key_id}",
+            get(master_key::get),
+        )
+        .route(
+            "/{version}/master-key/by-id/{master_key_id}/secrets",
+            get(master_key::secrets),
+        )
         .route(
             "/{version}/admin/cleanup-expired",
             axum::routing::delete(admin::cleanup_expired),

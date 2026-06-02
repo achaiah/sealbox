@@ -3,7 +3,7 @@ members = ["sealbox-server", "sealbox-cli"]
 resolver = "2"
 
 [workspace.package]
-rust-version = "1.85.0"
+rust-version = "1.95.0"
 
 [workspace.dependencies]
 anyhow = "1.0.102"
@@ -17,12 +17,12 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.37.0", features = ["bundled", "uuid"] }
-rsa = { version = "0.9", features = ["pem"] }
-rand = "0.10"
-aes-gcm = "0.10"
+rsa = { version = "0.10.0-rc.18", features = ["encoding", "sha2"] }
+rand = "0.10.1"
+aes-gcm = { version = "0.11.0-rc.4", features = ["rand_core"] }
 base64 = "0.22"
 hmac = "0.13"
-sha2 = "0.11"
+sha2 = "0.11.0"
 dotenvy = "0.15"
 config = "0.15"
 clap = { version = "4.6", features = ["derive"] }

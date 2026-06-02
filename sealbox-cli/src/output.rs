@@ -132,6 +132,53 @@ impl OutputManager {
         Ok(())
     }
 
+    pub fn print_secret_infos(&self, secrets: &[sealbox_server::repo::SecretInfo]) -> Result<()> {
+        match self.format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(secrets)?);
+            }
+            OutputFormat::Yaml => {
+                for secret in secrets {
+                    println!("- key: {}", secret.key);
+                    println!("  version: {}", secret.version);
+                    println!("  created_at: {}", secret.created_at);
+                    println!("  updated_at: {}", secret.updated_at);
+                    if let Some(expires_at) = secret.expires_at {
+                        println!("  expires_at: {expires_at}");
+                    }
+                    println!();
+                }
+            }
+            OutputFormat::Table => {
+                let mut table = Table::new();
+                table.load_preset(UTF8_FULL);
+                table.set_header(vec![
+                    "Key",
+                    "Version",
+                    "Created At",
+                    "Updated At",
+                    "Expires At",
+                ]);
+
+                for secret in secrets {
+                    table.add_row(vec![
+                        secret.key.clone(),
+                        secret.version.to_string(),
+                        Self::format_timestamp(secret.created_at),
+                        Self::format_timestamp(secret.updated_at),
+                        secret
+                            .expires_at
+                            .map(Self::format_timestamp)
+                            .unwrap_or_else(|| "Never".to_string()),
+                    ]);
+                }
+
+                println!("{table}");
+            }
+        }
+        Ok(())
+    }
+
     fn print_as_table(&self, value: &Value) -> Result<()> {
         let mut table = Table::new();
         table.load_preset(UTF8_FULL);
@@ -192,6 +239,15 @@ impl OutputManager {
             Value::Null => "null".to_string(),
             _ => serde_json::to_string(value).unwrap_or_else(|_| "Unable to display".to_string()),
         }
+    }
+
+    fn format_timestamp(timestamp: i64) -> String {
+        time::OffsetDateTime::from_unix_timestamp(timestamp)
+            .map(|dt| {
+                dt.format(&time::format_description::well_known::Rfc2822)
+                    .unwrap_or_else(|_| dt.to_string())
+            })
+            .unwrap_or_else(|_| timestamp.to_string())
     }
 
     pub fn print_success(&self, message: &str) {

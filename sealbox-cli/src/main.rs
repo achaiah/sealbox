@@ -11,9 +11,9 @@ use clap::{Parser, Subcommand};
 #[command(name = "sealbox")]
 #[command(author = "Sealbox Team")]
 #[command(version = "1.0.0")]
-#[command(about = "Sealbox CLI - End-to-end encrypted secret management tool")]
+#[command(about = "Sealbox CLI - client-encrypted secret management tool")]
 #[command(
-    long_about = "Sealbox is a lightweight, single-node secret storage service with end-to-end encryption using RSA key pairs."
+    long_about = "Sealbox is a lightweight, single-node secret storage service where the CLI encrypts secrets locally using RSA key pairs."
 )]
 struct Cli {
     #[command(subcommand)]

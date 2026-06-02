@@ -26,8 +26,8 @@ pub enum MasterKeyCryptoError {
 
 pub type Result<T, E = MasterKeyCryptoError> = std::result::Result<T, E>;
 
-fn new_padding() -> Oaep {
-    Oaep::new::<Sha256>()
+fn new_padding() -> Oaep<Sha256> {
+    Oaep::<Sha256>::new()
 }
 
 #[derive(Debug)]
@@ -123,7 +123,7 @@ impl PublicMasterKey {
         let padding = new_padding();
         let encrypted = self
             .0
-            .encrypt(&mut rand::thread_rng(), padding, plaintext)
+            .encrypt(&mut rand::rng(), padding, plaintext)
             .map_err(MasterKeyCryptoError::FailedToEncrypt)?;
         Ok(encrypted)
     }
@@ -159,7 +159,7 @@ impl std::str::FromStr for PublicMasterKey {
 /// must remain on the client.
 pub fn generate_key_pair() -> Result<(String, String), MasterKeyCryptoError> {
     // Generate 2048-bit RSA key pair
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let bits = 2048;
     let priv_key = RsaPrivateKey::new(&mut rng, bits)
         .map_err(MasterKeyCryptoError::FailedToGeneratePrivateKey)?;

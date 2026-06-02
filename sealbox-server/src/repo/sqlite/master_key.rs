@@ -24,6 +24,25 @@ impl SqliteMasterKeyRepo {
             )",
             (),
         )?;
+        conn.execute(
+            "UPDATE master_keys
+             SET status = 'Retired'
+             WHERE status = 'Active'
+               AND id NOT IN (
+                   SELECT id
+                   FROM master_keys
+                   WHERE status = 'Active'
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1
+               )",
+            (),
+        )?;
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_master_keys_one_active
+             ON master_keys(status)
+             WHERE status = 'Active'",
+            (),
+        )?;
         Ok(())
     }
 }
@@ -51,20 +70,40 @@ impl MasterKeyRepo for SqliteMasterKeyRepo {
         Ok(())
     }
 
-    fn fetch_public_key(
+    fn fetch_master_key(
         &self,
         conn: &rusqlite::Connection,
         master_key_id: &Uuid,
-    ) -> Result<Option<String>> {
-        let mut stmt = conn.prepare("SELECT public_key FROM master_keys WHERE id = ?1 LIMIT 1")?;
-        let public_key = stmt
-            .query_one([master_key_id], |row| row.get(0))
+    ) -> Result<Option<MasterKey>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, public_key, created_at, status, description, metadata
+             FROM master_keys
+             WHERE id = ?1
+             LIMIT 1",
+        )?;
+        let master_key = stmt
+            .query_one([master_key_id], |row| {
+                Ok(MasterKey {
+                    id: row.get(0)?,
+                    public_key: row.get(1)?,
+                    created_at: row.get(2)?,
+                    status: row.get(3)?,
+                    description: row.get(4)?,
+                    metadata: row.get(5)?,
+                })
+            })
             .optional()?;
-        Ok(public_key)
+        Ok(master_key)
     }
 
     fn get_valid_master_key(&self, conn: &rusqlite::Connection) -> Result<MasterKey> {
-        let mut stmt = conn.prepare("SELECT * FROM master_keys WHERE status = ?1 LIMIT 1")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, public_key, created_at, status, description, metadata
+             FROM master_keys
+             WHERE status = ?1
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+        )?;
         let master_key = stmt
             .query_one([MasterKeyStatus::Active], |row| {
                 Ok(MasterKey {
