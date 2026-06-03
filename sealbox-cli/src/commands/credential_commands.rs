@@ -43,6 +43,49 @@ struct SetCredentialInput {
     password_policy: crate::PasswordPolicyArgs,
 }
 
+#[derive(Debug, Default)]
+struct CredentialSearchFilters {
+    name: Option<String>,
+    username: Option<String>,
+    query: Option<String>,
+}
+
+impl CredentialSearchFilters {
+    fn new(name: Option<String>, username: Option<String>, query: Option<String>) -> Self {
+        Self {
+            name: name.map(|filter| filter.to_lowercase()),
+            username: username.map(|filter| filter.to_lowercase()),
+            query: query.map(|filter| filter.to_lowercase()),
+        }
+    }
+
+    fn matches(&self, credential_name: &str, username: &str) -> bool {
+        let credential_name = credential_name.to_lowercase();
+        let username = username.to_lowercase();
+
+        if let Some(filter) = &self.name
+            && !credential_name.contains(filter)
+        {
+            return false;
+        }
+
+        if let Some(filter) = &self.username
+            && !username.contains(filter)
+        {
+            return false;
+        }
+
+        if let Some(filter) = &self.query
+            && !credential_name.contains(filter)
+            && !username.contains(filter)
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
 pub async fn handle_command(command: CredentialCommands, config: &Config) -> Result<()> {
     let output = OutputManager::new(config.output.format.clone());
 
@@ -72,7 +115,18 @@ pub async fn handle_command(command: CredentialCommands, config: &Config) -> Res
         CredentialCommands::Get { key, version } => {
             get_credential(config, &output, key, version).await
         }
-        CredentialCommands::List { username } => list_credentials(config, &output, username).await,
+        CredentialCommands::List {
+            name,
+            username,
+            query,
+        } => {
+            list_credentials(
+                config,
+                &output,
+                CredentialSearchFilters::new(name, username, query),
+            )
+            .await
+        }
     }
 }
 
@@ -162,7 +216,7 @@ async fn get_credential(
 async fn list_credentials(
     config: &Config,
     output: &OutputManager,
-    username_filter: Option<String>,
+    filters: CredentialSearchFilters,
 ) -> Result<()> {
     config
         .validate()
@@ -193,7 +247,6 @@ async fn list_credentials(
         .json()
         .await
         .context("Failed to parse server response")?;
-    let normalized_filter = username_filter.map(|filter| filter.to_lowercase());
     let credentials = result
         .secrets
         .into_iter()
@@ -203,9 +256,7 @@ async fn list_credentials(
             if credential_metadata.credential_type != "credential" {
                 return None;
             }
-            if let Some(filter) = &normalized_filter
-                && !credential_metadata.username.to_lowercase().contains(filter)
-            {
+            if !filters.matches(&secret.key, &credential_metadata.username) {
                 return None;
             }
             Some(json!({
@@ -224,4 +275,52 @@ async fn list_credentials(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_credential_search_matches_name_substring_case_insensitive() {
+        let filters = CredentialSearchFilters::new(Some("POSTGRES".to_string()), None, None);
+
+        assert!(filters.matches("db/postgres", "app_user"));
+    }
+
+    #[test]
+    fn test_credential_search_matches_username_substring_case_insensitive() {
+        let filters = CredentialSearchFilters::new(None, Some("APP".to_string()), None);
+
+        assert!(filters.matches("db/postgres", "app_user"));
+    }
+
+    #[test]
+    fn test_credential_search_query_matches_name_or_username() {
+        let name_query = CredentialSearchFilters::new(None, None, Some("postgres".to_string()));
+        let username_query = CredentialSearchFilters::new(None, None, Some("app".to_string()));
+
+        assert!(name_query.matches("db/postgres", "service_user"));
+        assert!(username_query.matches("db/postgres", "app_user"));
+    }
+
+    #[test]
+    fn test_credential_search_combines_specific_filters() {
+        let filters = CredentialSearchFilters::new(
+            Some("db/".to_string()),
+            Some("app".to_string()),
+            Some("postgres".to_string()),
+        );
+
+        assert!(filters.matches("db/postgres", "app_user"));
+        assert!(!filters.matches("api/postgres", "app_user"));
+        assert!(!filters.matches("db/postgres", "service_user"));
+    }
+
+    #[test]
+    fn test_credential_search_without_filters_matches_all_credentials() {
+        let filters = CredentialSearchFilters::default();
+
+        assert!(filters.matches("db/postgres", "app_user"));
+    }
 }

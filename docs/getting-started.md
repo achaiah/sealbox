@@ -127,8 +127,10 @@ printf '%s\n' "db-password" | ./target/release/sealbox-cli credential set db/pos
 # List all your secrets
 ./target/release/sealbox-cli secret list
 
-# List credentials by searchable username metadata
+# List credentials by searchable name/key or username metadata
+./target/release/sealbox-cli credential list --name db/
 ./target/release/sealbox-cli credential list --username app
+./target/release/sealbox-cli credential list --query postgres
 
 # Export a versioned encrypted archive
 ./target/release/sealbox-cli secret export backups/sealbox-export.tar.enc

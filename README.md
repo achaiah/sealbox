@@ -92,8 +92,10 @@ export LISTEN_ADDR=127.0.0.1:8080
 # Store a credential password from piped stdin
 printf '%s\n' "db-password" | ./target/release/sealbox-cli credential set db/postgres --username app_user
 
-# List credentials, optionally filtering by plaintext username metadata
+# List credentials, optionally filtering by credential name/key or username
+./target/release/sealbox-cli credential list --name db/
 ./target/release/sealbox-cli credential list --username app
+./target/release/sealbox-cli credential list --query postgres
 
 # Export an encrypted archive for backup or migration
 ./target/release/sealbox-cli secret export backups/sealbox-export.tar.enc

@@ -277,9 +277,15 @@ enum CredentialCommands {
     },
     /// List credentials using plaintext metadata
     List {
+        /// Filter by credential name/key substring
+        #[arg(long, visible_alias = "key")]
+        name: Option<String>,
         /// Filter by username substring
         #[arg(long)]
         username: Option<String>,
+        /// Filter by credential name/key or username substring
+        #[arg(long)]
+        query: Option<String>,
     },
 }
 
@@ -390,6 +396,38 @@ mod tests {
                 assert!(password_policy.alphanumeric);
             }
             _ => panic!("Expected credential set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_credential_list_search_filters() {
+        let cli = Cli::try_parse_from([
+            "sealbox",
+            "credential",
+            "list",
+            "--name",
+            "db/",
+            "--username",
+            "app",
+            "--query",
+            "prod",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Credential {
+                command:
+                    CredentialCommands::List {
+                        name,
+                        username,
+                        query,
+                    },
+            } => {
+                assert_eq!(name.as_deref(), Some("db/"));
+                assert_eq!(username.as_deref(), Some("app"));
+                assert_eq!(query.as_deref(), Some("prod"));
+            }
+            _ => panic!("Expected credential list command"),
         }
     }
 }

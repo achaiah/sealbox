@@ -387,7 +387,12 @@ sealbox-cli credential list [OPTIONS]
 ```
 
 **Options:**
+- `--name <text>` - Filter by credential name/key substring
+- `--key <text>` - Alias for `--name`
 - `--username <text>` - Filter by username substring
+- `--query <text>` - Filter by credential name/key or username substring
+
+Search filters are case-insensitive substring matches. If multiple specific filters are provided, all of them must match. `--query` matches either credential name/key or username.
 
 ## TTL and Administration
 
