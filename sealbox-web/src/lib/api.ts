@@ -128,9 +128,10 @@ export class SealboxApi {
     });
   }
 
-  async deleteSecret(key: string, version: number): Promise<void> {
+  async deleteSecret(key: string, version?: number): Promise<void> {
+    const queryParam = version !== undefined ? `?version=${version}` : "";
     return this.request<void>(
-      `/v1/secrets/${encodeURIComponent(key)}?version=${version}`,
+      `/v1/secrets/${encodeURIComponent(key)}${queryParam}`,
       {
         method: "DELETE",
       },

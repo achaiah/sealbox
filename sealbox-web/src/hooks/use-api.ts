@@ -58,7 +58,7 @@ export function useDeleteSecret() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ key, version }: { key: string; version: number }) =>
+    mutationFn: ({ key, version }: { key: string; version?: number }) =>
       apiClient!.deleteSecret(key, version),
     onSuccess: () => {
       // Refresh secrets list

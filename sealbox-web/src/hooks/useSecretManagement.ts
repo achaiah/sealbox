@@ -27,7 +27,6 @@ export function useSecretManagement() {
     try {
       await deleteSecretMutation.mutateAsync({
         key: secret.key,
-        version: secret.version,
       });
 
       toast.success(t("secrets.deleted"), {

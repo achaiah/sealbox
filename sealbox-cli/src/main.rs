@@ -177,9 +177,9 @@ enum SecretCommands {
     Delete {
         /// Secret key name
         key: String,
-        /// Version number
+        /// Specific version number. If omitted, all versions are deleted.
         #[arg(long)]
-        version: i32,
+        version: Option<i32>,
     },
     /// List all secret keys (requires server support)
     List,
@@ -286,6 +286,11 @@ enum CredentialCommands {
         /// Filter by credential name/key or username substring
         #[arg(long)]
         query: Option<String>,
+    },
+    /// Delete a credential and all stored versions
+    Delete {
+        /// Credential key name
+        key: String,
     },
 }
 
@@ -428,6 +433,58 @@ mod tests {
                 assert_eq!(query.as_deref(), Some("prod"));
             }
             _ => panic!("Expected credential list command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_secret_delete_without_version() {
+        let cli = Cli::try_parse_from(["sealbox", "secret", "delete", "db/postgres"]).unwrap();
+
+        match cli.command {
+            Commands::Secret {
+                command: SecretCommands::Delete { key, version },
+            } => {
+                assert_eq!(key, "db/postgres");
+                assert_eq!(version, None);
+            }
+            _ => panic!("Expected secret delete command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_secret_delete_with_version() {
+        let cli = Cli::try_parse_from([
+            "sealbox",
+            "secret",
+            "delete",
+            "db/postgres",
+            "--version",
+            "2",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Secret {
+                command: SecretCommands::Delete { key, version },
+            } => {
+                assert_eq!(key, "db/postgres");
+                assert_eq!(version, Some(2));
+            }
+            _ => panic!("Expected secret delete command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_credential_delete() {
+        let cli = Cli::try_parse_from(["sealbox", "credential", "delete", "db/postgres"]).unwrap();
+
+        match cli.command {
+            Commands::Credential {
+                command: CredentialCommands::Delete { key },
+            } => {
+                assert_eq!(key, "db/postgres");
+            }
+            _ => panic!("Expected credential delete command"),
         }
     }
 }

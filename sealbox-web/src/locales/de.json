@@ -83,7 +83,7 @@
       "description": "Um den entschlüsselten Wert anzuzeigen, verwenden Sie: {{command}}",
       "tooltip": "Klicken Sie, um den CLI-Befehl zur Entschlüsselung anzuzeigen"
     },
-    "confirmDelete": "Sind Sie sicher, dass Sie '{{name}}' löschen möchten?",
+    "confirmDelete": "'{{name}}' und alle Versionen löschen?",
     "deleted": "Geheimnis gelöscht",
     "deletedDescription": "{{name}} wurde erfolgreich gelöscht",
     "refreshed": "Geheimnisse aktualisiert",

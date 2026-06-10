@@ -161,7 +161,7 @@ The Web UI integrates with all sealbox-server APIs:
 
 - `GET /v1/secrets` - List secrets
 - `GET /v1/secrets/:key` - Get secret details
-- `DELETE /v1/secrets/:key` - Delete secret
+- `DELETE /v1/secrets/:key` - Delete secret and all versions
 - `GET /v1/master-key` - List master keys
 - `GET /v1/master-key/active` - Fetch active public key metadata
 - `POST /v1/master-key` - Register master key

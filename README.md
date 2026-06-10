@@ -371,6 +371,8 @@ Sealbox implements client-side envelope encryption for CLI writes and reads:
 
 Credential commands store the username and password together inside the encrypted secret value. The username is also duplicated into plaintext `metadata` so credentials can be listed and searched by username without decrypting every value.
 
+Sealbox keeps the latest 10 versions for each credential key and automatically prunes older credential versions when a new one is saved.
+
 Password generation happens locally in the CLI using the Rust randomness stack already bundled with Sealbox. `password generate` prints generated values; `credential set --generate-password` stores the generated password without printing it unless `--show-password` is passed. Use `--alphanumeric` when you need random-ID-style values without symbols.
 
 Exported archives are encrypted locally: the CLI builds a tar payload in memory, encrypts it with AES-256-GCM, encrypts the archive data key with the configured public key, and writes a versioned envelope so future importers can migrate older archive structures.
@@ -414,7 +416,10 @@ GET /v1/secrets/:key
 # Retrieve specific version
 GET /v1/secrets/:key?version=1
 
-# Delete a secret version
+# Delete a secret and all versions
+DELETE /v1/secrets/:key
+
+# Delete a specific secret version
 DELETE /v1/secrets/:key?version=1
 ```
 

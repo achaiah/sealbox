@@ -155,6 +155,7 @@ pub(crate) trait SecretRepo: Send + Sync {
         key: &str,
         input: EncryptedSecretInput,
     ) -> Result<Secret>;
+    fn delete_secret(&self, conn: &rusqlite::Connection, key: &str) -> Result<()>;
     fn delete_secret_by_version(
         &self,
         conn: &rusqlite::Connection,

@@ -268,22 +268,27 @@ pub async fn fetch_decrypted_secret(
     })
 }
 
-async fn delete_secret(
+pub async fn delete_secret(
     config: &Config,
     output: &OutputManager,
     key: String,
-    version: i32,
+    version: Option<i32>,
 ) -> Result<()> {
     config
         .validate()
         .context("Configuration validation failed")?;
 
-    let url = format!(
-        "{}/v1/secrets/{}?version={}",
-        config.server.url, key, version
-    );
+    let mut url = format!("{}/v1/secrets/{}", config.server.url, key);
+    if let Some(version) = version {
+        url.push_str(&format!("?version={version}"));
+    }
 
-    output.print_info(&format!("Deleting secret '{key}' version {version}..."));
+    match version {
+        Some(version) => {
+            output.print_info(&format!("Deleting secret '{key}' version {version}..."))
+        }
+        None => output.print_info(&format!("Deleting secret '{key}' and all versions...")),
+    }
 
     let client = Client::new();
     let response = client
@@ -295,9 +300,12 @@ async fn delete_secret(
 
     let status = response.status();
     if status.is_success() {
-        output.print_success(&format!(
-            "Secret '{key}' version {version} deleted successfully!"
-        ));
+        match version {
+            Some(version) => output.print_success(&format!(
+                "Secret '{key}' version {version} deleted successfully!"
+            )),
+            None => output.print_success(&format!("Secret '{key}' deleted successfully!")),
+        }
     } else {
         let error_body = response
             .text()

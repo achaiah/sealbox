@@ -126,10 +126,10 @@ pub(crate) async fn save(
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct DeleteSecretQueryParams {
-    version: i32,
+    version: Option<i32>,
 }
 
-// DELETE /{version}/secrets/{secret_key}
+// DELETE /{version}/secrets/{secret_key}[?version=N]
 pub(crate) async fn delete(
     State(state): State<AppState>,
     Path(params): Path<SecretPathParams>,
@@ -138,11 +138,20 @@ pub(crate) async fn delete(
     match params.version() {
         Version::V1 => {
             let conn = state.conn_pool.lock()?;
-            state.secret_repo.delete_secret_by_version(
-                &conn,
-                &params.secret_key(),
-                query.version,
-            )?;
+            match query.version {
+                Some(version) => {
+                    state.secret_repo.delete_secret_by_version(
+                        &conn,
+                        &params.secret_key(),
+                        version,
+                    )?;
+                }
+                None => {
+                    state
+                        .secret_repo
+                        .delete_secret(&conn, &params.secret_key())?;
+                }
+            }
             Ok(SealboxResponse::Ok)
         }
         _ => Err(SealboxError::InvalidApiVersion),

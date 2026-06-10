@@ -9,7 +9,7 @@ use crate::{
     config::Config,
     output::OutputManager,
     password_commands::{generate_password, print_generated_password},
-    secret_commands::{fetch_decrypted_secret, save_secret_value},
+    secret_commands::{delete_secret, fetch_decrypted_secret, save_secret_value},
 };
 
 use super::input::read_secret_from_tty_or_stdin;
@@ -127,6 +127,7 @@ pub async fn handle_command(command: CredentialCommands, config: &Config) -> Res
             )
             .await
         }
+        CredentialCommands::Delete { key } => delete_secret(config, &output, key, None).await,
     }
 }
 

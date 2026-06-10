@@ -83,7 +83,7 @@
       "description": "要查看解密后的值，请使用: {{command}}",
       "tooltip": "点击查看解密的CLI命令"
     },
-    "confirmDelete": "确定要删除 '{{name}}' 吗？",
+    "confirmDelete": "确定要删除 '{{name}}' 及其所有版本吗？",
     "deleted": "密钥已删除",
     "deletedDescription": "{{name}} 已成功删除",
     "refreshed": "密钥已刷新",

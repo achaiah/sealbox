@@ -83,7 +83,7 @@
       "description": "復号化された値を表示するには次を使用: {{command}}",
       "tooltip": "復号化のCLIコマンドを表示するにはクリック"
     },
-    "confirmDelete": "'{{name}}' を削除してもよろしいですか？",
+    "confirmDelete": "'{{name}}' とすべてのバージョンを削除しますか？",
     "deleted": "シークレットが削除されました",
     "deletedDescription": "{{name}} が正常に削除されました",
     "refreshed": "シークレットが更新されました",

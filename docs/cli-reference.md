@@ -213,7 +213,7 @@ sealbox-cli secret list [OPTIONS]
 
 ### `secret delete`
 
-Delete a secret or specific version.
+Delete a secret and all stored versions by default, or delete one specific version.
 
 ```bash
 sealbox-cli secret delete <key> [OPTIONS]
@@ -223,12 +223,15 @@ sealbox-cli secret delete <key> [OPTIONS]
 - `<key>` - Secret identifier
 
 **Options:**
-- `--version <version>` - Specific version to delete
+- `--version <version>` - Delete only this specific version
 - `--url <url>` - Server URL (overrides config)
 - `--token <token>` - Authentication token (overrides config)
 
 **Examples:**
 ```bash
+# Delete all versions
+sealbox-cli secret delete old_password
+
 # Delete specific version
 sealbox-cli secret delete old_password --version 1
 ```
@@ -328,6 +331,8 @@ sealbox-cli password generate --count 5 --exclude-ambiguous
 
 Credential commands store username/password pairs as encrypted JSON secret values. The username is also stored as plaintext metadata so credentials can be listed and filtered without decrypting every record.
 
+Sealbox retains only the latest 10 versions for each credential key. Older credential versions are pruned automatically when a new credential version is saved.
+
 ### `credential set`
 
 Store a username/password credential. The password is read from a hidden prompt when attached to a TTY, from stdin when piped, or generated locally with `--generate-password`.
@@ -393,6 +398,19 @@ sealbox-cli credential list [OPTIONS]
 - `--query <text>` - Filter by credential name/key or username substring
 
 Search filters are case-insensitive substring matches. If multiple specific filters are provided, all of them must match. `--query` matches either credential name/key or username.
+
+### `credential delete`
+
+Delete a credential and all stored versions.
+
+```bash
+sealbox-cli credential delete <key>
+```
+
+**Example:**
+```bash
+sealbox-cli credential delete db/postgres
+```
 
 ## TTL and Administration
 

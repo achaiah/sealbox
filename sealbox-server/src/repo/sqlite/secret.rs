@@ -7,6 +7,8 @@ use crate::{
     repo::{EncryptedSecretInput, Secret, SecretRepo},
 };
 
+const CREDENTIAL_VERSION_LIMIT: i32 = 10;
+
 #[derive(Debug, Clone)]
 pub(crate) struct SqliteSecretRepo;
 
@@ -35,6 +37,42 @@ impl SqliteSecretRepo {
 }
 
 impl SqliteSecretRepo {
+    fn has_credential_metadata(metadata: Option<&str>) -> bool {
+        let Some(metadata) = metadata else {
+            return false;
+        };
+        let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata) else {
+            return false;
+        };
+
+        metadata.get("type").and_then(|value| value.as_str()) == Some("credential")
+    }
+
+    fn prune_old_credential_versions(
+        tx: &rusqlite::Transaction,
+        key: &str,
+        latest_version: i32,
+    ) -> Result<()> {
+        let oldest_version_to_delete = latest_version - CREDENTIAL_VERSION_LIMIT;
+        if oldest_version_to_delete <= 0 {
+            return Ok(());
+        }
+
+        let deleted_count = tx.execute(
+            "DELETE FROM secrets WHERE key = ?1 AND version <= ?2",
+            (key, oldest_version_to_delete),
+        )?;
+
+        if deleted_count > 0 {
+            info!(
+                "Pruned {} old credential versions for '{}'",
+                deleted_count, key
+            );
+        }
+
+        Ok(())
+    }
+
     fn cleanup_expired_for_key(tx: &rusqlite::Transaction, key: &str) -> Result<()> {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         tx.execute(
@@ -273,6 +311,10 @@ impl SecretRepo for SqliteSecretRepo {
             ),
         )?;
 
+        if Self::has_credential_metadata(secret.metadata.as_deref()) {
+            Self::prune_old_credential_versions(&tx, &secret.key, secret.version)?;
+        }
+
         tx.commit()?;
 
         Ok(secret)
@@ -289,6 +331,15 @@ impl SecretRepo for SqliteSecretRepo {
             "DELETE FROM secrets WHERE key = ?1 AND version = ?2",
             (key, version),
         )?;
+        if changed == 0 {
+            return Err(SealboxError::SecretNotFound(key.to_string()));
+        }
+        Ok(())
+    }
+
+    fn delete_secret(&self, conn: &rusqlite::Connection, key: &str) -> Result<()> {
+        info!("delete_secret");
+        let changed = conn.execute("DELETE FROM secrets WHERE key = ?1", [key])?;
         if changed == 0 {
             return Err(SealboxError::SecretNotFound(key.to_string()));
         }
@@ -659,6 +710,136 @@ mod tests {
             SealboxError::SecretNotFound(key) => assert_eq!(key, "nonexistent-key"),
             _ => panic!("Expected SecretNotFound error"),
         }
+    }
+
+    #[test]
+    fn test_delete_secret_deletes_all_versions() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+        let master_key = create_test_master_key();
+
+        let secret_key = "test-secret";
+        let mut conn_mut = conn;
+
+        repo.create_new_version(
+            &mut conn_mut,
+            secret_key,
+            "data version 1",
+            master_key.clone(),
+            None,
+        )
+        .expect("Should create version 1");
+
+        repo.create_new_version(
+            &mut conn_mut,
+            secret_key,
+            "data version 2",
+            master_key,
+            None,
+        )
+        .expect("Should create version 2");
+
+        repo.delete_secret(&conn_mut, secret_key)
+            .expect("Should delete all versions");
+
+        let latest_result = repo.get_secret(&mut conn_mut, secret_key);
+        assert!(latest_result.is_err());
+
+        let version_1_result = repo.get_secret_by_version(&mut conn_mut, secret_key, 1);
+        assert!(version_1_result.is_err());
+
+        let version_2_result = repo.get_secret_by_version(&mut conn_mut, secret_key, 2);
+        assert!(version_2_result.is_err());
+    }
+
+    #[test]
+    fn test_delete_secret_not_found() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+
+        let result = repo.delete_secret(&conn, "nonexistent-key");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            SealboxError::SecretNotFound(key) => assert_eq!(key, "nonexistent-key"),
+            _ => panic!("Expected SecretNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_credential_versions_are_capped_at_ten() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+        let master_key = create_test_master_key();
+        let mut conn_mut = conn;
+
+        let mut latest_version = 0;
+        for index in 0..11 {
+            let secret = repo
+                .create_new_encrypted_version(
+                    &mut conn_mut,
+                    "db/postgres",
+                    EncryptedSecretInput {
+                        encrypted_data: vec![index],
+                        encrypted_data_key: vec![index],
+                        master_key_id: master_key.id,
+                        ttl: None,
+                        metadata: Some(
+                            r#"{"type":"credential","username":"app_user"}"#.to_string(),
+                        ),
+                    },
+                )
+                .expect("Should create credential version");
+            latest_version = secret.version;
+        }
+
+        assert_eq!(latest_version, 11);
+
+        let version_1_result = repo.get_secret_by_version(&mut conn_mut, "db/postgres", 1);
+        assert!(version_1_result.is_err());
+
+        let version_2_result = repo
+            .get_secret_by_version(&mut conn_mut, "db/postgres", 2)
+            .expect("Version 2 should be retained");
+        assert_eq!(version_2_result.version, 2);
+
+        let latest = repo
+            .get_secret(&mut conn_mut, "db/postgres")
+            .expect("Latest credential version should be retained");
+        assert_eq!(latest.version, 11);
+    }
+
+    #[test]
+    fn test_non_credential_versions_are_not_capped() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+        let master_key = create_test_master_key();
+        let mut conn_mut = conn;
+
+        for index in 0..11 {
+            repo.create_new_encrypted_version(
+                &mut conn_mut,
+                "plain-secret",
+                EncryptedSecretInput {
+                    encrypted_data: vec![index],
+                    encrypted_data_key: vec![index],
+                    master_key_id: master_key.id,
+                    ttl: None,
+                    metadata: None,
+                },
+            )
+            .expect("Should create secret version");
+        }
+
+        let version_1 = repo
+            .get_secret_by_version(&mut conn_mut, "plain-secret", 1)
+            .expect("Non-credential version 1 should be retained");
+        assert_eq!(version_1.version, 1);
+
+        let latest = repo
+            .get_secret(&mut conn_mut, "plain-secret")
+            .expect("Latest secret version should be retained");
+        assert_eq!(latest.version, 11);
     }
 
     #[test]

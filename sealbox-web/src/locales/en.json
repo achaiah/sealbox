@@ -83,7 +83,7 @@
       "description": "To view the decrypted value, use: {{command}}",
       "tooltip": "Click to show CLI command for decryption"
     },
-    "confirmDelete": "Are you sure you want to delete '{{name}}'?",
+    "confirmDelete": "Delete '{{name}}' and all versions?",
     "deleted": "Secret deleted",
     "deletedDescription": "{{name}} has been deleted successfully",
     "refreshed": "Secrets refreshed",
