@@ -84,6 +84,10 @@ pub fn create_app(config: &SealboxConfig) -> Result<Router> {
         // Business endpoints requiring authentication
         .route("/{version}/secrets", get(secret::list))
         .route(
+            "/{version}/secrets/{secret_key}/history",
+            get(secret::history),
+        )
+        .route(
             "/{version}/secrets/{secret_key}",
             get(secret::get).put(secret::save).delete(secret::delete),
         )

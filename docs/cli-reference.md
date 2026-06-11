@@ -211,6 +211,21 @@ sealbox-cli secret list [OPTIONS]
 - `--url <url>` - Server URL (overrides config)
 - `--token <token>` - Authentication token (overrides config)
 
+### `secret history`
+
+List retained version metadata for one secret. Secret values and encrypted payload bytes are not returned.
+
+```bash
+sealbox-cli secret history <key> [OPTIONS]
+```
+
+**Arguments:**
+- `<key>` - Secret identifier
+
+**Options:**
+- `--url <url>` - Server URL (overrides config)
+- `--token <token>` - Authentication token (overrides config)
+
 ### `secret delete`
 
 Delete a secret and all stored versions by default, or delete one specific version.
@@ -398,6 +413,19 @@ sealbox-cli credential list [OPTIONS]
 - `--query <text>` - Filter by credential name/key or username substring
 
 Search filters are case-insensitive substring matches. If multiple specific filters are provided, all of them must match. `--query` matches either credential name/key or username.
+
+### `credential history`
+
+List retained version metadata for one credential, including version numbers and plaintext username metadata. Passwords are not included.
+
+```bash
+sealbox-cli credential history <key>
+```
+
+**Example:**
+```bash
+sealbox-cli credential history db/postgres --output json
+```
 
 ### `credential delete`
 

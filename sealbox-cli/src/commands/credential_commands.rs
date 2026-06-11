@@ -9,7 +9,9 @@ use crate::{
     config::Config,
     output::OutputManager,
     password_commands::{generate_password, print_generated_password},
-    secret_commands::{delete_secret, fetch_decrypted_secret, save_secret_value},
+    secret_commands::{
+        delete_secret, fetch_decrypted_secret, fetch_secret_history, save_secret_value,
+    },
 };
 
 use super::input::read_secret_from_tty_or_stdin;
@@ -128,6 +130,7 @@ pub async fn handle_command(command: CredentialCommands, config: &Config) -> Res
             .await
         }
         CredentialCommands::Delete { key } => delete_secret(config, &output, key, None).await,
+        CredentialCommands::History { key } => get_credential_history(config, &output, key).await,
     }
 }
 
@@ -276,6 +279,39 @@ async fn list_credentials(
     }
 
     Ok(())
+}
+
+async fn get_credential_history(
+    config: &Config,
+    output: &OutputManager,
+    key: String,
+) -> Result<()> {
+    let versions = fetch_secret_history(config, &key).await?;
+    let credential_versions = versions
+        .into_iter()
+        .filter_map(|secret| {
+            let metadata = secret.metadata.as_deref()?;
+            let credential_metadata: CredentialMetadata = serde_json::from_str(metadata).ok()?;
+            if credential_metadata.credential_type != "credential" {
+                return None;
+            }
+            Some(json!({
+                "key": secret.key,
+                "version": secret.version,
+                "username": credential_metadata.username,
+                "created_at": secret.created_at,
+                "updated_at": secret.updated_at,
+                "expires_at": secret.expires_at,
+                "metadata": secret.metadata,
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    if credential_versions.is_empty() {
+        anyhow::bail!("Secret '{key}' is not a credential or has no retained credential versions");
+    }
+
+    output.print_value(&json!(credential_versions))
 }
 
 #[cfg(test)]

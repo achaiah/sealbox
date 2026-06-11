@@ -3,6 +3,7 @@ import type {
   Secret,
   MasterKey,
   SecretsListResponse,
+  SecretHistoryResponse,
   CreateSecretRequest,
   CreateMasterKeyRequest,
   RotateMasterKeyRequest,
@@ -121,6 +122,12 @@ export class SealboxApi {
     );
   }
 
+  async getSecretHistory(key: string): Promise<SecretHistoryResponse> {
+    return this.request<SecretHistoryResponse>(
+      `/v1/secrets/${encodeURIComponent(key)}/history`,
+    );
+  }
+
   async createSecret(key: string, data: CreateSecretRequest): Promise<Secret> {
     return this.request<Secret>(`/v1/secrets/${encodeURIComponent(key)}`, {
       method: "PUT",
@@ -191,5 +198,6 @@ export const createApiClient = (baseUrl: string, token?: string) => {
 export const queryKeys = {
   secrets: ["secrets"] as const,
   secret: (key: string, version?: number) => ["secret", key, version] as const,
+  secretHistory: (key: string) => ["secret-history", key] as const,
   masterKeys: ["masterKeys"] as const,
 } as const;

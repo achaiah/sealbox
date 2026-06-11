@@ -5,7 +5,7 @@ use sealbox_server::{
         data_key::DataKey,
         master_key::{PrivateMasterKey, PublicMasterKey},
     },
-    repo::{MasterKey, Secret},
+    repo::{MasterKey, Secret, SecretInfo},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,6 +21,26 @@ pub struct DecryptedSecret {
     pub version: i32,
     pub expires_at: Option<i64>,
     pub metadata: Option<String>,
+}
+
+fn encode_path_segment(segment: &str) -> String {
+    let mut encoded = String::new();
+    for &byte in segment.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn secret_key_url(config: &Config, key: &str) -> String {
+    format!(
+        "{}/v1/secrets/{}",
+        config.server.url.trim_end_matches('/'),
+        encode_path_segment(key)
+    )
 }
 
 pub async fn handle_command(command: SecretCommands, config: &Config) -> Result<()> {
@@ -170,7 +190,7 @@ pub async fn save_secret_value(
 
     let client = Client::new();
     let response = client
-        .put(format!("{}/v1/secrets/{}", config.server.url, key))
+        .put(secret_key_url(config, &key))
         .bearer_auth(&config.server.token)
         .json(&payload)
         .send()
@@ -210,7 +230,7 @@ pub async fn fetch_decrypted_secret(
         .validate()
         .context("Configuration validation failed")?;
 
-    let mut url = format!("{}/v1/secrets/{}", config.server.url, key);
+    let mut url = secret_key_url(config, key);
     if let Some(v) = version {
         url.push_str(&format!("?version={v}"));
     }
@@ -278,7 +298,7 @@ pub async fn delete_secret(
         .validate()
         .context("Configuration validation failed")?;
 
-    let mut url = format!("{}/v1/secrets/{}", config.server.url, key);
+    let mut url = secret_key_url(config, &key);
     if let Some(version) = version {
         url.push_str(&format!("?version={version}"));
     }
@@ -323,7 +343,12 @@ pub async fn delete_secret(
 
 #[derive(Debug, Deserialize)]
 struct ListSecretsResponse {
-    secrets: Vec<sealbox_server::repo::SecretInfo>,
+    secrets: Vec<SecretInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SecretHistoryResponse {
+    versions: Vec<SecretInfo>,
 }
 
 async fn list_secrets(config: &Config, output: &OutputManager) -> Result<()> {
@@ -368,12 +393,46 @@ async fn list_secrets(config: &Config, output: &OutputManager) -> Result<()> {
     Ok(())
 }
 
-async fn get_secret_history(_config: &Config, output: &OutputManager, key: String) -> Result<()> {
-    // Note: Current server API doesn't directly support version history listing, this is a reserved feature
-    output.print_warning("Server does not currently support viewing secret version history");
-    output.print_info(&format!(
-        "To get a specific version of the secret, use: sealbox secret get {key} --version <N>"
-    ));
+pub async fn fetch_secret_history(config: &Config, key: &str) -> Result<Vec<SecretInfo>> {
+    config
+        .validate()
+        .context("Configuration validation failed")?;
+
+    let client = Client::new();
+    let response = client
+        .get(format!("{}/history", secret_key_url(config, key)))
+        .bearer_auth(&config.server.token)
+        .send()
+        .await
+        .context("Failed to request server")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to get error information".to_string());
+        anyhow::bail!(
+            "Server returned error (status code: {}):\n{}",
+            status,
+            error_body
+        );
+    }
+
+    let result: SecretHistoryResponse = response
+        .json()
+        .await
+        .context("Failed to parse server response")?;
+
+    Ok(result.versions)
+}
+
+async fn get_secret_history(config: &Config, output: &OutputManager, key: String) -> Result<()> {
+    output.print_info(&format!("Fetching version history for secret '{key}'..."));
+
+    let versions = fetch_secret_history(config, &key).await?;
+    output.print_secret_infos(&versions)?;
+
     Ok(())
 }
 
@@ -390,6 +449,16 @@ mod tests {
         config.keys.private_key_path = temp_dir.path().join("private.pem");
         config.server.token = "test-token".to_string();
         (config, temp_dir)
+    }
+
+    #[test]
+    fn test_secret_key_url_encodes_path_segments() {
+        let (mut config, _temp_dir) = create_test_config();
+        config.server.url = "http://localhost:8080/".to_string();
+
+        let url = secret_key_url(&config, "db/postgres");
+
+        assert_eq!(url, "http://localhost:8080/v1/secrets/db%2Fpostgres");
     }
 
     #[tokio::test]

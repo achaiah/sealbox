@@ -204,3 +204,26 @@ pub(crate) async fn list(
         _ => Err(SealboxError::InvalidApiVersion),
     }
 }
+
+/// API handler function for listing retained versions for one secret key
+///
+/// Returns metadata only. Encrypted data and encrypted data keys are not included.
+///
+/// # HTTP Route
+///
+/// `GET /{version}/secrets/{secret_key}/history`
+pub(crate) async fn history(
+    State(state): State<AppState>,
+    Path(params): Path<SecretPathParams>,
+) -> Result<SealboxResponse> {
+    match params.version() {
+        Version::V1 => {
+            let conn = state.conn_pool.lock()?;
+            let versions = state
+                .secret_repo
+                .list_secret_versions(&conn, &params.secret_key())?;
+            Ok(SealboxResponse::Json(json!({ "versions": versions })))
+        }
+        _ => Err(SealboxError::InvalidApiVersion),
+    }
+}

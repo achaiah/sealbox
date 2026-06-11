@@ -39,6 +39,19 @@ export function useSecret(
   });
 }
 
+export function useSecretHistory(
+  key: string,
+  options?: { enabled?: boolean },
+) {
+  const apiClient = useApiClient();
+
+  return useQuery({
+    queryKey: queryKeys.secretHistory(key),
+    queryFn: () => apiClient?.getSecretHistory(key),
+    enabled: !!apiClient && !!key && options?.enabled !== false,
+  });
+}
+
 export function useCreateSecret() {
   const apiClient = useApiClient();
   const queryClient = useQueryClient();

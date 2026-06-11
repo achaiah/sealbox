@@ -188,6 +188,7 @@ The CLI uses TOML configuration files with environment variable overrides:
 - `GET /v1/secrets` - List all secrets with metadata (key, version, timestamps, TTL)
 - `PUT /v1/secrets/:key` - Create secret version (supports TTL via `ttl` field)
 - `GET /v1/secrets/:key[?version=N]` - Retrieve secret (automatic expiry check)
+- `GET /v1/secrets/:key/history` - List retained version metadata
 - `DELETE /v1/secrets/:key[?version=N]` - Delete all secret versions by default, or delete one version when `version` is provided
 - `POST /v1/master-key` - Register public key
 - `GET /v1/master-key` - List public keys

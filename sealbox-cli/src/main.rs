@@ -287,6 +287,11 @@ enum CredentialCommands {
         #[arg(long)]
         query: Option<String>,
     },
+    /// View credential version history
+    History {
+        /// Credential key name
+        key: String,
+    },
     /// Delete a credential and all stored versions
     Delete {
         /// Credential key name
@@ -485,6 +490,20 @@ mod tests {
                 assert_eq!(key, "db/postgres");
             }
             _ => panic!("Expected credential delete command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_credential_history() {
+        let cli = Cli::try_parse_from(["sealbox", "credential", "history", "db/postgres"]).unwrap();
+
+        match cli.command {
+            Commands::Credential {
+                command: CredentialCommands::History { key },
+            } => {
+                assert_eq!(key, "db/postgres");
+            }
+            _ => panic!("Expected credential history command"),
         }
     }
 }

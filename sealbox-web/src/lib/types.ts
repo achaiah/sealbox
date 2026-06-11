@@ -36,6 +36,10 @@ export interface SecretsListResponse {
   secrets: SecretInfo[];
 }
 
+export interface SecretHistoryResponse {
+  versions: SecretInfo[];
+}
+
 export interface CreateSecretRequest {
   encrypted_data: number[];
   encrypted_data_key: number[];

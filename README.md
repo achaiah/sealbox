@@ -416,6 +416,9 @@ GET /v1/secrets/:key
 # Retrieve specific version
 GET /v1/secrets/:key?version=1
 
+# List retained version metadata
+GET /v1/secrets/:key/history
+
 # Delete a secret and all versions
 DELETE /v1/secrets/:key
 

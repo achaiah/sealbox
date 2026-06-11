@@ -18,7 +18,7 @@ mod sqlite;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretInfo {
     pub key: String,              // Secret key identifier
-    pub version: i32,             // Latest version number
+    pub version: i32,             // Secret version number
     pub created_at: i64,          // Creation timestamp (Unix time)
     pub updated_at: i64,          // Last update timestamp (Unix time)
     pub expires_at: Option<i64>,  // Expiry timestamp (Unix time), optional for TTL
@@ -175,6 +175,12 @@ pub(crate) trait SecretRepo: Send + Sync {
     fn cleanup_expired_secrets(&self, conn: &rusqlite::Connection) -> Result<usize>;
     /// List all secrets with basic information (key, latest version, timestamps)
     fn list_secrets(&self, conn: &rusqlite::Connection) -> Result<Vec<SecretInfo>>;
+    /// List retained, non-expired versions for one secret key.
+    fn list_secret_versions(
+        &self,
+        conn: &rusqlite::Connection,
+        key: &str,
+    ) -> Result<Vec<SecretInfo>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

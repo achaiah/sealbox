@@ -451,6 +451,49 @@ impl SecretRepo for SqliteSecretRepo {
 
         Ok(secret_infos)
     }
+
+    fn list_secret_versions(
+        &self,
+        conn: &rusqlite::Connection,
+        key: &str,
+    ) -> Result<Vec<crate::repo::SecretInfo>> {
+        info!("list_secret_versions: key={}", key);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+        let mut stmt = conn.prepare(
+            "SELECT
+                key,
+                version,
+                created_at,
+                updated_at,
+                expires_at,
+                metadata
+            FROM secrets
+            WHERE key = ?1
+              AND (expires_at IS NULL OR expires_at > ?2)
+            ORDER BY version DESC",
+        )?;
+
+        let secret_infos = stmt
+            .query_map((key, now), |row| {
+                Ok(crate::repo::SecretInfo {
+                    key: row.get(0)?,
+                    version: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    metadata: row.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| SealboxError::DatabaseError(e.to_string()))?;
+
+        if secret_infos.is_empty() {
+            return Err(SealboxError::SecretNotFound(key.to_string()));
+        }
+
+        Ok(secret_infos)
+    }
 }
 
 #[cfg(test)]
@@ -840,6 +883,54 @@ mod tests {
             .get_secret(&mut conn_mut, "plain-secret")
             .expect("Latest secret version should be retained");
         assert_eq!(latest.version, 11);
+    }
+
+    #[test]
+    fn test_list_secret_versions_returns_retained_versions_newest_first() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+        let master_key = create_test_master_key();
+        let mut conn_mut = conn;
+
+        for index in 0..3 {
+            repo.create_new_encrypted_version(
+                &mut conn_mut,
+                "db/postgres",
+                EncryptedSecretInput {
+                    encrypted_data: vec![index],
+                    encrypted_data_key: vec![index],
+                    master_key_id: master_key.id,
+                    ttl: None,
+                    metadata: Some(r#"{"type":"credential","username":"app_user"}"#.to_string()),
+                },
+            )
+            .expect("Should create credential version");
+        }
+
+        let versions = repo
+            .list_secret_versions(&conn_mut, "db/postgres")
+            .expect("Should list credential versions");
+
+        let version_numbers = versions
+            .iter()
+            .map(|secret| secret.version)
+            .collect::<Vec<_>>();
+        assert_eq!(version_numbers, vec![3, 2, 1]);
+        assert!(versions.iter().all(|secret| secret.key == "db/postgres"));
+    }
+
+    #[test]
+    fn test_list_secret_versions_not_found() {
+        let conn = setup_test_db();
+        let repo = SqliteSecretRepo;
+
+        let result = repo.list_secret_versions(&conn, "missing-secret");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            SealboxError::SecretNotFound(key) => assert_eq!(key, "missing-secret"),
+            _ => panic!("Expected SecretNotFound error"),
+        }
     }
 
     #[test]
